@@ -942,6 +942,24 @@ def scan_stream() -> Response:
     base_args = _ranked_scan_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = max(0, int(base_args.max_retries))
+    min_target_matches = max(1, int(os.getenv("MIN_TARGET_MATCHES", "8")))
+    fallback_raw = str(os.getenv("COURSE_SCORE_FALLBACKS", "")).strip()
+    if fallback_raw:
+        parsed_tiers: list[float] = []
+        for item in fallback_raw.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            try:
+                parsed_tiers.append(float(item))
+            except ValueError:
+                continue
+        if not parsed_tiers:
+            parsed_tiers = [float(getattr(base_args, "min_course_pattern_score", 62.0)), 56.0, 50.0]
+    else:
+        strict = float(getattr(base_args, "min_course_pattern_score", 62.0))
+        parsed_tiers = [strict, max(56.0, strict - 4.0), 50.0]
+    course_score_tiers = sorted({max(0.0, t) for t in parsed_tiers}, reverse=True)
     reference_symbol = PATTERN_REF_SYMBOL_DEFAULT
     reference_pattern = None
     reference_error = ""
@@ -969,7 +987,7 @@ def scan_stream() -> Response:
             yield json.dumps(
                 {
                     "type": "status",
-                    "message": f"Reference pattern: {reference_symbol} ({str(getattr(reference_pattern, 'setup_direction', 'n/a')).upper()}) with inverse enabled",
+                    "message": f"Reference pattern: {reference_symbol} ({str(getattr(reference_pattern, 'setup_direction', 'n/a')).upper()}) with direct BULL/BEAR bias",
                 }
             ) + "\n"
         elif reference_error:
@@ -977,67 +995,101 @@ def scan_stream() -> Response:
         yield json.dumps({"type": "metrics", "scanned": 0, "matches": 0, "total": total_symbols, "tier": "ranked"}) + "\n"
         yield json.dumps({"type": "status", "message": "Scanning ranked universe...", "tier": "ranked"}) + "\n"
 
-        pending_symbols = list(symbols)
-        attempt = 0
-        scanned = 0
+        scanned_symbols: set[str] = set()
+        remaining_symbols = list(symbols)
         hard_failures: list[tuple[str, str]] = []
+        final_tier_label = "strict"
 
-        while pending_symbols:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                future_map = {pool.submit(_analyze_for_args, sym, base_args): sym for sym in pending_symbols}
-                retry_symbols: list[str] = []
+        for idx, tier_score in enumerate(course_score_tiers):
+            if not remaining_symbols:
+                break
 
-                for fut in concurrent.futures.as_completed(future_map):
-                    sym = future_map[fut]
-                    scanned += 1
-                    yield json.dumps(
-                        {"type": "progress", "message": f"ranked: {scanned}/{len(symbols)} analyzed ({sym})"}
-                    ) + "\n"
-                    yield json.dumps(
-                        {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "ranked"}
-                    ) + "\n"
-
-                    try:
-                        analyzed = fut.result()
-                    except Exception as exc:
-                        if attempt < max_retries:
-                            retry_symbols.append(sym)
-                        else:
-                            hard_failures.append((sym, str(exc)))
-                        continue
-
-                    if not analyzed:
-                        continue
-
-                    if reference_pattern:
-                        direct_similarity = _pattern_similarity(reference_pattern, analyzed)
-                        setattr(analyzed, "pattern_similarity_direct", direct_similarity)
-                        setattr(analyzed, "pattern_similarity", direct_similarity)
-                        setattr(analyzed, "pattern_mode", str(getattr(analyzed, "setup_direction", "n/a")).upper())
-
-                    found += 1
-                    row = _result_row(analyzed)
-                    yield json.dumps({"type": "match", "tier": "ranked", "row": row}) + "\n"
-                    yield json.dumps(
-                        {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "ranked"}
-                    ) + "\n"
-
-            if retry_symbols:
-                attempt += 1
+            tier_label = f"tier{idx + 1}"
+            final_tier_label = tier_label
+            tier_args = copy.deepcopy(base_args)
+            tier_args.min_course_pattern_score = float(tier_score)
+            if idx > 0:
                 yield json.dumps(
-                    {"type": "status", "message": f"ranked: retrying {len(retry_symbols)} symbol(s), attempt {attempt}/{max_retries}"}
+                    {
+                        "type": "status",
+                        "message": f"Relaxing course score gate to {tier_score:.1f} to improve coverage.",
+                        "tier": tier_label,
+                    }
                 ) + "\n"
-            pending_symbols = retry_symbols
+            else:
+                yield json.dumps(
+                    {
+                        "type": "status",
+                        "message": f"Strict course score gate: {tier_score:.1f}",
+                        "tier": tier_label,
+                    }
+                ) + "\n"
+
+            pending_symbols = list(remaining_symbols)
+            remaining_symbols = []
+            attempt = 0
+
+            while pending_symbols:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                    future_map = {pool.submit(_analyze_for_args, sym, tier_args): sym for sym in pending_symbols}
+                    retry_symbols: list[str] = []
+
+                    for fut in concurrent.futures.as_completed(future_map):
+                        sym = future_map[fut]
+                        scanned_symbols.add(sym)
+                        scanned = len(scanned_symbols)
+                        yield json.dumps(
+                            {"type": "progress", "message": f"{tier_label}: {scanned}/{len(symbols)} analyzed ({sym})"}
+                        ) + "\n"
+                        yield json.dumps(
+                            {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": tier_label}
+                        ) + "\n"
+
+                        try:
+                            analyzed = fut.result()
+                        except Exception as exc:
+                            if attempt < max_retries:
+                                retry_symbols.append(sym)
+                            else:
+                                hard_failures.append((sym, str(exc)))
+                            continue
+
+                        if not analyzed:
+                            remaining_symbols.append(sym)
+                            continue
+
+                        if reference_pattern:
+                            direct_similarity = _pattern_similarity(reference_pattern, analyzed)
+                            setattr(analyzed, "pattern_similarity_direct", direct_similarity)
+                            setattr(analyzed, "pattern_similarity", direct_similarity)
+                            setattr(analyzed, "pattern_mode", str(getattr(analyzed, "setup_direction", "n/a")).upper())
+
+                        found += 1
+                        row = _result_row(analyzed)
+                        yield json.dumps({"type": "match", "tier": tier_label, "row": row}) + "\n"
+                        yield json.dumps(
+                            {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": tier_label}
+                        ) + "\n"
+
+                if retry_symbols:
+                    attempt += 1
+                    yield json.dumps(
+                        {"type": "status", "message": f"{tier_label}: retrying {len(retry_symbols)} symbol(s), attempt {attempt}/{max_retries}"}
+                    ) + "\n"
+                pending_symbols = retry_symbols
+
+            if found >= min_target_matches:
+                break
 
         if hard_failures and base_args.no_skips:
             first = hard_failures[0]
             yield json.dumps(
                 {"type": "error", "message": f"No-skips mode failed. Could not fetch {len(hard_failures)} symbol(s). First: {first[0]} ({first[1]})"}
             ) + "\n"
-            yield json.dumps({"type": "done", "count": found, "tier": "ranked"}) + "\n"
+            yield json.dumps({"type": "done", "count": found, "tier": final_tier_label}) + "\n"
             return
 
-        yield json.dumps({"type": "done", "count": found, "tier": "ranked"}) + "\n"
+        yield json.dumps({"type": "done", "count": found, "tier": final_tier_label}) + "\n"
 
     return Response(_generate(), mimetype="application/x-ndjson")
 
