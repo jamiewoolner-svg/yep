@@ -208,9 +208,31 @@
 
     function pick(idx, series) { return idx.map(i => series[i]); }
 
+    function sortResultRows() {
+      const rows = Array.from(resultsBody.querySelectorAll('tr'));
+      rows.sort((a, b) => {
+        const aScore = Number(a.dataset.score || 0);
+        const bScore = Number(b.dataset.score || 0);
+        if (bScore !== aScore) return bScore - aScore;
+        const aPre3x = Number(a.dataset.pre3x || 0);
+        const bPre3x = Number(b.dataset.pre3x || 0);
+        if (bPre3x !== aPre3x) return bPre3x - aPre3x;
+        const aHistWr = Number(a.dataset.histwr || 0);
+        const bHistWr = Number(b.dataset.histwr || 0);
+        if (bHistWr !== aHistWr) return bHistWr - aHistWr;
+        const aSym = String(a.dataset.symbol || '');
+        const bSym = String(b.dataset.symbol || '');
+        return aSym.localeCompare(bSym);
+      });
+      for (const r of rows) resultsBody.appendChild(r);
+    }
+
     function addRow(row) {
       const tr = document.createElement('tr');
       tr.dataset.score = String(row.setup_score);
+      tr.dataset.pre3x = String(row.pre3x);
+      tr.dataset.histwr = String(row.hist_wr);
+      tr.dataset.symbol = String(row.symbol || '');
       tr.innerHTML = `
         <td>${row.symbol}</td>
         <td>${row.dir}</td>
@@ -236,18 +258,8 @@
         <td>${row.setup_score.toFixed(1)}</td>
         <td>${row.dollar_volume}</td>
       `;
-      let inserted = false;
-      for (const existing of resultsBody.children) {
-        const existingScore = Number(existing.dataset.score || 0);
-        if (row.setup_score > existingScore) {
-          resultsBody.insertBefore(tr, existing);
-          inserted = true;
-          break;
-        }
-      }
-      if (!inserted) {
-        resultsBody.appendChild(tr);
-      }
+      resultsBody.appendChild(tr);
+      sortResultRows();
     }
 
     function renderCharts() {
