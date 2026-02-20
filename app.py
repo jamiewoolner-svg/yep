@@ -879,6 +879,29 @@ def _passes_watchlist_loose(result: Any, args: SimpleNamespace) -> bool:
     return bool(cross_age <= recent_daily or near_cross or band_recent)
 
 
+def _passes_candidate_floor(result: Any, args: SimpleNamespace) -> bool:
+    """Last-resort floor so scanner can still surface ranked candidates."""
+    if not result:
+        return False
+    close = float(getattr(result, "close", 0.0) or 0.0)
+    if close <= 0:
+        return False
+    if not (float(getattr(args, "min_price", 5.0)) <= close <= float(getattr(args, "max_price", 1000.0))):
+        return False
+    if float(getattr(result, "dollar_volume20", 0.0) or 0.0) < 500_000.0:
+        return False
+    recent = int(getattr(args, "recent_daily_bars", 30) or 30)
+    if _recent_lifecycle_window_ok(result, recent):
+        return True
+    direction = str(getattr(result, "setup_direction", "bull")).lower()
+    if direction == "bear":
+        cross_age = min(int(getattr(result, "macd_bear_cross_age", 999)), int(getattr(result, "stoch_bear_cross_age", 999)))
+    else:
+        cross_age = min(int(getattr(result, "macd_cross_age", 999)), int(getattr(result, "stoch_cross_age", 999)))
+    near_cross = abs(float(getattr(result, "macd_gap_now", 0.0) or 0.0)) <= 0.20 or abs(float(getattr(result, "stoch_gap_now", 0.0) or 0.0)) <= 12.0
+    return bool(cross_age <= max(6, recent) or near_cross)
+
+
 def _precision_entry_ok(intraday: list[Candle], daily: Any, args: SimpleNamespace) -> bool:
     # Course precision ladder: 21 (daily), 13 (233), 8/5 (55/34 style intraday refinement).
     direction = str(getattr(daily, "setup_direction", "bull")).lower()
@@ -909,7 +932,8 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                 return None
             strict_ok = passes_filters(daily, args)
             loose_ok = bool(getattr(args, "allow_momentum_watchlist", False)) and _passes_watchlist_loose(daily, args)
-            if not (strict_ok or loose_ok):
+            floor_ok = bool(getattr(args, "force_candidate_mode", False)) and _passes_candidate_floor(daily, args)
+            if not (strict_ok or loose_ok or floor_ok):
                 return None
             lookback = max(4, int(getattr(args, "cross_lookback", 6)))
             gap_max = max(2, int(getattr(args, "triple_gap_max", 4)))
@@ -1071,10 +1095,15 @@ def scan_stream() -> Response:
     max_retries = min(1, max(0, int(base_args.max_retries)))
     target_hits = max(1, int(os.getenv("TARGET_HITS", "100")))
     max_tune_steps = max(1, int(os.getenv("MAX_TUNE_STEPS", "6")))
-    max_scan_seconds = max(30, int(os.getenv("MAX_SCAN_SECONDS", "120")))
+    max_scan_seconds = max(60, int(os.getenv("MAX_SCAN_SECONDS", "420")))
 
     def _tuned_args(step: int) -> SimpleNamespace:
         a = copy.deepcopy(base_args)
+        # Keep scan responsive: prioritize daily-first detection in live scans.
+        a.require_daily_and_233 = False
+        a.require_hourly = False
+        a.require_precision_entry = False
+        a.scan_intraday_3x = False
         # Step 0: strict baseline.
         if step >= 1:
             a.allow_momentum_watchlist = True
@@ -1104,6 +1133,7 @@ def scan_stream() -> Response:
         if step >= 5:
             a.recent_daily_bars = max(int(getattr(a, "recent_daily_bars", 20)), 40)
             a.recent_233_bars = max(int(getattr(a, "recent_233_bars", 20)), 40)
+            a.force_candidate_mode = True
         return a
     reference_symbol = PATTERN_REF_SYMBOL_DEFAULT
     reference_pattern = None
