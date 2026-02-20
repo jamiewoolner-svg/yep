@@ -113,6 +113,7 @@ class ScanResult:
     risk_pct: float
     rr_mid: float
     options_setup_score: float
+    course_pattern_score: float
     touched_outer_band_recent: bool
     outer_touch_age: int
     band_width_expansion: float
@@ -243,6 +244,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.05,
         help="Minimum fractional BB width expansion vs recent baseline.",
+    )
+    parser.add_argument(
+        "--min-course-pattern-score",
+        type=float,
+        default=55.0,
+        help="Minimum class-rules pattern score (0-100). Higher = stricter.",
     )
     parser.add_argument(
         "--max-setup-age",
@@ -1275,7 +1282,7 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         POWS_STOCH_SMOOTH_D,
     )
     macd_line, macd_signal = macd(closes, POWS_MACD_FAST, POWS_MACD_SLOW, POWS_MACD_SIGNAL)
-    sma2_series = sma_series(closes, 2)
+    sma2_series = shift_series(sma_series(closes, 2), 2)
     sma3_series = shift_series(sma_series(closes, 3), 3)
     stoch_k_series, stoch_d_series = stoch_rsi_series(
         closes,
@@ -1453,6 +1460,31 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         + 10.0 * liq_quality
     )
 
+    # Course-aligned signal quality score (0-100): trend + fresh momentum + BB behavior.
+    if setup_direction == "bull":
+        trend_quality = 1.0 if (close >= sma50 and sma50 >= sma89) else 0.0
+        momentum_quality = 1.0 if (macd_line >= macd_signal and stoch_rsi_k >= stoch_rsi_d) else 0.0
+        band_action_quality = 1.0 if (liftoff_from_band and outer_touch_age <= 3) else 0.0
+        fresh_age = min(price_cross_age, macd_cross_age, stoch_cross_age, outer_touch_age)
+    else:
+        trend_quality = 1.0 if (close <= sma50 and sma50 <= sma89) else 0.0
+        momentum_quality = 1.0 if (macd_line <= macd_signal and stoch_rsi_k <= stoch_rsi_d) else 0.0
+        band_action_quality = 1.0 if (rejection_from_band and outer_touch_age <= 3) else 0.0
+        fresh_age = min(price_bear_cross_age, macd_bear_cross_age, stoch_bear_cross_age, outer_touch_age)
+    spread_quality = _clamp01((band_width_expansion - 0.02) / 0.12)
+    fresh_quality = _clamp01(1.0 - (fresh_age / 3.0))
+    target_quality = _clamp01(target_mid_pct / 0.012)
+    rr_course_quality = _clamp01(rr_mid / 1.5)
+    course_pattern_score = 100.0 * (
+        0.20 * trend_quality
+        + 0.20 * momentum_quality
+        + 0.20 * band_action_quality
+        + 0.15 * spread_quality
+        + 0.15 * fresh_quality
+        + 0.05 * target_quality
+        + 0.05 * rr_course_quality
+    )
+
     # Composite ranking: trend, liquidity, and moderate RSI preferred.
     trend_component = (close / sma20) + (sma20 / sma50)
     liquidity_component = math.log10(max(dollar_volume20, 1.0))
@@ -1477,6 +1509,7 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         + (hist_win_rate_5y - 0.5)
         + (hist_avg_return_5y * 10.0)
         + (options_setup_score / 100.0)
+        + (course_pattern_score / 25.0)
     )
 
     return ScanResult(
@@ -1522,6 +1555,7 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         risk_pct=risk_pct,
         rr_mid=rr_mid,
         options_setup_score=options_setup_score,
+        course_pattern_score=course_pattern_score,
         touched_outer_band_recent=touched_outer_band_recent,
         outer_touch_age=outer_touch_age,
         band_width_expansion=band_width_expansion,
@@ -1675,6 +1709,8 @@ def passes_filters(result: ScanResult, args: argparse.Namespace) -> bool:
         if result.stoch_rsi_k > args.max_stoch_rsi_k:
             return False
     if result.adx14 < args.min_adx:
+        return False
+    if result.course_pattern_score < float(getattr(args, "min_course_pattern_score", 0.0)):
         return False
     if require_breakout and not result.breakout_20d:
         return False

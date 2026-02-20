@@ -195,7 +195,7 @@
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Symbol</th><th>Dir</th><th>Setup</th><th>Pattern%</th><th>Bias</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>BB Exp</th><th>Pre3x</th><th>Hist N</th><th>Hist WR%</th><th>Hist Avg%</th><th>Tgt Mid%</th><th>Tgt Band%</th><th>Risk%</th><th>RR Mid</th><th>SetupScore</th><th>$Vol20</th></tr>
+            <tr><th>Symbol</th><th>Dir</th><th>Setup</th><th>Course%</th><th>Pattern%</th><th>Bias</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>BB Exp</th><th>Pre3x</th><th>Hist N</th><th>Hist WR%</th><th>Hist Avg%</th><th>Tgt Mid%</th><th>Tgt Band%</th><th>Risk%</th><th>RR Mid</th><th>SetupScore</th><th>$Vol20</th></tr>
           </thead>
           <tbody id="results-body"></tbody>
         </table>
@@ -325,7 +325,8 @@
         (num(row.raw_pre3x, num(row.pre3x, 0)) * 2.0) +
         (num(row.raw_hist_wr, num(row.hist_wr, 0) / 100.0) * 100.0) +
         (Math.max(0, num(row.raw_bb_expansion, num(row.bb_expansion, 0))) * 300.0) +
-        (num(row.raw_pattern_similarity, num(row.pattern_similarity, 0) / 100.0) * 1000.0)
+        (num(row.raw_pattern_similarity, num(row.pattern_similarity, 0) / 100.0) * 1000.0) +
+        (num(row.raw_course_score, num(row.course_score, 0)) * 20.0)
       );
       tr.dataset.rank = String(num(row.rank_score, computedRank));
       tr.dataset.pre3x = String(num(row.raw_pre3x, num(row.pre3x, 0)));
@@ -338,6 +339,7 @@
         <td>${row.symbol}</td>
         <td>${row.dir}</td>
         <td>${row.setup}</td>
+        <td>${num(row.course_score, 0).toFixed(1)}</td>
         <td>${num(row.pattern_similarity, 0).toFixed(1)}</td>
         <td>${String(row.pattern_mode || row.dir || 'N/A')}</td>
         <td>${row.close.toFixed(2)}</td>

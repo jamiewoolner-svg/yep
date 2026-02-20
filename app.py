@@ -371,6 +371,7 @@ def _build_args(form: Any) -> SimpleNamespace:
         cross_lookback=_as_int(form, "cross_lookback", 4),
         band_touch_lookback=_as_int(form, "band_touch_lookback", 6),
         min_band_expansion=_as_float(form, "min_band_expansion", 0.05),
+        min_course_pattern_score=_as_float(form, "min_course_pattern_score", 55.0),
         max_setup_age=_as_int(form, "max_setup_age", 3),
         require_daily_and_233=(form.get("require_daily_and_233") == "on"),
         intraday_interval_min=5,
@@ -450,6 +451,7 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
     raw_bb_expansion = float(getattr(analyzed, "band_width_expansion", 0.0) or 0.0)
     raw_pattern_similarity = float(getattr(analyzed, "pattern_similarity", 0.0) or 0.0)
     raw_pattern_direct = float(getattr(analyzed, "pattern_similarity_direct", 0.0) or 0.0)
+    raw_course_score = float(getattr(analyzed, "course_pattern_score", 0.0) or 0.0)
     rank_score = (
         (raw_setup_score * 1000.0)
         + (raw_score * 10.0)
@@ -457,6 +459,7 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         + (raw_hist_wr * 100.0)
         + (max(0.0, raw_bb_expansion) * 300.0)
         + (raw_pattern_similarity * PATTERN_REF_WEIGHT)
+        + (raw_course_score * 20.0)
     )
     return {
         "symbol": analyzed.symbol,
@@ -483,6 +486,7 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "risk": _safe_num(getattr(analyzed, "risk_pct", 0.0) * 100.0, 2),
         "rr": _safe_num(getattr(analyzed, "rr_mid", 0.0), 2),
         "setup_score": _safe_num(raw_setup_score, 1),
+        "course_score": _safe_num(raw_course_score, 1),
         "dollar_volume": format_money(analyzed.dollar_volume20),
         "score": _safe_num(raw_score, 3),
         "raw_setup_score": raw_setup_score,
@@ -490,6 +494,7 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "raw_pre3x": raw_pre3x,
         "raw_hist_wr": raw_hist_wr,
         "raw_bb_expansion": raw_bb_expansion,
+        "raw_course_score": raw_course_score,
         "pattern_similarity": _safe_num(raw_pattern_similarity * 100.0, 1),
         "raw_pattern_similarity": raw_pattern_similarity,
         "pattern_mode": str(getattr(analyzed, "setup_direction", "n/a")).upper(),
@@ -520,6 +525,7 @@ def _strategy_args() -> SimpleNamespace:
         triple_gap_max=6,
         band_touch_lookback=8,
         min_band_expansion=0.03,
+        min_course_pattern_score=55.0,
         max_setup_age=3,
         require_daily_and_233=True,
         require_hourly=True,
@@ -636,6 +642,7 @@ def _ranked_scan_args() -> SimpleNamespace:
     args.min_dollar_volume = min(args.min_dollar_volume, 1_000_000.0)
     args.min_band_expansion = max(args.min_band_expansion, 0.08)
     args.band_touch_lookback = min(args.band_touch_lookback, 3)
+    args.min_course_pattern_score = max(float(getattr(args, "min_course_pattern_score", 55.0)), 62.0)
     return args
 
 
