@@ -1995,6 +1995,7 @@ def _passes_directional_setup(
     min_band_ride_score = max(0.0, min(1.0, float(getattr(args, "min_band_ride_score", 0.62))))
     require_widening_oscillation = bool(getattr(args, "require_widening_oscillation", False))
     min_band_oscillation_score = max(0.0, min(1.0, float(getattr(args, "min_band_oscillation_score", 0.35))))
+    allow_momentum_watchlist = bool(getattr(args, "allow_momentum_watchlist", False))
     require_simultaneous_cross = args.require_simultaneous_cross
     # Hard recency ceiling: only current/potential setups near present are allowed.
     recent_cross_limit = 3
@@ -2091,14 +2092,19 @@ def _passes_directional_setup(
     bull_stoch_ready = 1.0 if bull_stoch_cross_up else (0.85 if bull_stoch_imminent else 0.0)
     bear_stoch_ready = 1.0 if bear_stoch_cross_down else (0.85 if bear_stoch_imminent else 0.0)
     # Do not force both to have already crossed. Accept strong "about to cross" alignment.
-    bull_momentum_ready = (
-        (bull_macd_ready + bull_stoch_ready) >= 1.35
-        and (bull_macd_ready >= 0.85 or bull_stoch_ready >= 0.85)
-    )
-    bear_momentum_ready = (
-        (bear_macd_ready + bear_stoch_ready) >= 1.35
-        and (bear_macd_ready >= 0.85 or bear_stoch_ready >= 0.85)
-    )
+    if allow_momentum_watchlist:
+        # Broad fallback: either oscillator can lead while the other is still developing.
+        bull_momentum_ready = (bull_macd_ready >= 0.85) or (bull_stoch_ready >= 0.85)
+        bear_momentum_ready = (bear_macd_ready >= 0.85) or (bear_stoch_ready >= 0.85)
+    else:
+        bull_momentum_ready = (
+            (bull_macd_ready + bull_stoch_ready) >= 1.35
+            and (bull_macd_ready >= 0.85 or bull_stoch_ready >= 0.85)
+        )
+        bear_momentum_ready = (
+            (bear_macd_ready + bear_stoch_ready) >= 1.35
+            and (bear_macd_ready >= 0.85 or bear_stoch_ready >= 0.85)
+        )
     bull_ok = bull_ok and bull_momentum_ready
     bear_ok = bear_ok and bear_momentum_ready
 

@@ -1154,7 +1154,7 @@ def scan_stream() -> Response:
             if tier_i == 2:
                 # True fallback tier: broaden to avoid all-zero scans.
                 tier_args.pows = False
-                tier_args.min_course_pattern_score = min(tier_args.min_course_pattern_score, 35.0)
+                tier_args.min_course_pattern_score = 0.0
                 tier_args.min_target_band_pct = min(tier_args.min_target_band_pct, 0.003)
                 tier_args.min_band_vs_prev_month = min(tier_args.min_band_vs_prev_month, 1.0)
                 tier_args.max_band_double_age = max(tier_args.max_band_double_age, 30)
@@ -1166,6 +1166,9 @@ def scan_stream() -> Response:
                 tier_args.require_band_widen_window = False
                 tier_args.require_widening_oscillation = False
                 tier_args.require_band_ride = False
+                tier_args.allow_momentum_watchlist = True
+                tier_args.recent_daily_bars = 40
+                tier_args.recent_233_bars = 40
             if idx > 0:
                 yield json.dumps(
                     {
