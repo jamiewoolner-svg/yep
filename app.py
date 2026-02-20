@@ -1050,7 +1050,7 @@ def healthz() -> Response:
 
 @app.route("/scan_stream", methods=["POST"])
 def scan_stream() -> Response:
-    workers = max(8, int(os.getenv("SCAN_WORKERS", "24")))
+    workers = max(1, min(8, int(os.getenv("SCAN_WORKERS", "4"))))
     plot_days = 260
 
     try:
@@ -1068,9 +1068,10 @@ def scan_stream() -> Response:
 
     base_args = _ranked_scan_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
-    max_retries = max(0, int(base_args.max_retries))
+    max_retries = min(1, max(0, int(base_args.max_retries)))
     target_hits = max(1, int(os.getenv("TARGET_HITS", "100")))
     max_tune_steps = max(1, int(os.getenv("MAX_TUNE_STEPS", "6")))
+    max_scan_seconds = max(30, int(os.getenv("MAX_SCAN_SECONDS", "120")))
 
     def _tuned_args(step: int) -> SimpleNamespace:
         a = copy.deepcopy(base_args)
@@ -1116,6 +1117,7 @@ def scan_stream() -> Response:
 
     @stream_with_context
     def _generate() -> Any:
+        scan_start_ts = time.time()
         found = 0
         total_symbols = len(symbols)
         yield json.dumps({"type": "status", "message": f"Universe size: {total_symbols} symbols"}) + "\n"
@@ -1155,6 +1157,15 @@ def scan_stream() -> Response:
         remaining_symbols = list(symbols)
 
         for step in range(max_tune_steps):
+            if (time.time() - scan_start_ts) > max_scan_seconds:
+                yield json.dumps(
+                    {
+                        "type": "status",
+                        "message": f"Scan time budget reached ({max_scan_seconds}s). Returning current results.",
+                        "tier": "live",
+                    }
+                ) + "\n"
+                break
             if not remaining_symbols or found >= target_hits:
                 break
             tune_args = _tuned_args(step)
@@ -1171,6 +1182,8 @@ def scan_stream() -> Response:
             pending_symbols = list(remaining_symbols)
             retry_attempt = 0
             while pending_symbols:
+                if (time.time() - scan_start_ts) > max_scan_seconds:
+                    break
                 with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
                     future_map = {pool.submit(_analyze_for_args, sym, tune_args): sym for sym in pending_symbols}
                     retry_symbols: list[str] = []
