@@ -820,15 +820,32 @@ def _recent_lifecycle_window_ok(result: Any, window_bars: int) -> bool:
         return False
     w = max(1, int(window_bars))
     direction = str(getattr(result, "setup_direction", "bull")).lower()
-    phase = int(getattr(result, "lifecycle_phase", 1))
     touch_age = int(getattr(result, "outer_touch_age", 999))
     dbl_age = int(getattr(result, "band_width_double_age", 999))
+    widen_age = int(getattr(result, "band_widen_start_age", 999))
+    macd_gap_now = float(getattr(result, "macd_gap_now", 0.0) or 0.0)
+    macd_signal = float(getattr(result, "macd_signal", 0.0) or 0.0)
+    stoch_gap_now = float(getattr(result, "stoch_gap_now", 0.0) or 0.0)
+    band_width_slope3 = float(getattr(result, "band_width_slope3", 0.0) or 0.0)
+    ride_score = (
+        float(getattr(result, "bear_band_ride_score", 0.0) or 0.0)
+        if direction == "bear"
+        else float(getattr(result, "bull_band_ride_score", 0.0) or 0.0)
+    )
     if direction == "bear":
         cross_age = min(int(getattr(result, "macd_bear_cross_age", 999)), int(getattr(result, "stoch_bear_cross_age", 999)))
     else:
         cross_age = min(int(getattr(result, "macd_cross_age", 999)), int(getattr(result, "stoch_cross_age", 999)))
-    # New setup rule: progression should be active recently, not historical.
-    return bool(phase >= 2 and min(touch_age, dbl_age, cross_age) <= w)
+    macd_near = abs(macd_gap_now) <= max(0.08, abs(macd_signal) * 0.5)
+    stoch_near = abs(stoch_gap_now) <= 6.0
+    momentum_recent = (cross_age <= w) or macd_near or stoch_near
+    band_recent = (
+        (touch_age <= w and (ride_score >= 0.40 or band_width_slope3 >= -0.002))
+        or (dbl_age <= w)
+        or (widen_age <= w)
+    )
+    # New setup rule: recent band interaction + recent/near momentum, not historical matches.
+    return bool(band_recent and momentum_recent)
 
 
 def _precision_entry_ok(intraday: list[Candle], daily: Any, args: SimpleNamespace) -> bool:
@@ -1034,7 +1051,7 @@ def scan_stream() -> Response:
     bb_multiple_tiers = [
         float(getattr(base_args, "min_band_vs_prev_month", 2.0)),
         1.6,
-        1.3,
+        1.1,
     ]
     bb_age_tiers = [
         int(getattr(base_args, "max_band_double_age", 14)),
@@ -1044,12 +1061,12 @@ def scan_stream() -> Response:
     bb_width_now_tiers = [
         float(getattr(base_args, "min_band_width_now", 0.08)),
         0.06,
-        0.04,
+        0.03,
     ]
     bb_pct_tiers = [
         float(getattr(base_args, "min_band_width_percentile", 0.60)),
         0.50,
-        0.40,
+        0.35,
     ]
     band_ride_tiers = [
         float(getattr(base_args, "min_band_ride_score", 0.62)),
