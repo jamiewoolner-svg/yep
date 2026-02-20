@@ -116,6 +116,9 @@ class ScanResult:
     target_band_pct: float
     risk_pct: float
     rr_mid: float
+    lifecycle_stage: str
+    lifecycle_phase: int
+    lifecycle_score: float
     options_setup_score: float
     course_pattern_score: float
     bb_compression_score: float
@@ -129,6 +132,8 @@ class ScanResult:
     band_width_vs_prev_month: float
     band_width_double_age: int
     band_width_double_recent_ok: bool
+    bull_band_ride_score: float
+    bear_band_ride_score: float
     band_widen_start_age: int
     band_widen_window_ok: bool
     liftoff_from_band: bool
@@ -306,6 +311,23 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.01,
         help="Minimum remaining move to target band (fractional) to avoid late entries.",
+    )
+    parser.add_argument(
+        "--require-band-ride",
+        action="store_true",
+        help="Require candles to ride the active Bollinger edge while bands are opening.",
+    )
+    parser.add_argument(
+        "--band-ride-lookback",
+        type=int,
+        default=8,
+        help="Bars used to score Bollinger edge riding behavior.",
+    )
+    parser.add_argument(
+        "--min-band-ride-score",
+        type=float,
+        default=0.62,
+        help="Minimum 0-1 score for directional Bollinger edge riding.",
     )
     parser.add_argument(
         "--min-course-pattern-score",
@@ -1480,6 +1502,39 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         if first_idx >= 0:
             band_width_double_age = last_idx - first_idx
             band_width_double_recent_ok = band_width_double_age <= 14
+    # "Band ride" score: candles staying near the active edge while width trends wider.
+    ride_lookback = 8
+    ride_start = max(0, last_idx - ride_lookback + 1)
+    bull_prox: list[float] = []
+    bear_prox: list[float] = []
+    bw_steps = 0
+    bw_up_steps = 0
+    prev_bw_step = math.nan
+    for i in range(ride_start, last_idx + 1):
+        if i >= len(bb_mid_series):
+            continue
+        mid_i = bb_mid_series[i]
+        up_i = bb_upper_series[i]
+        lo_i = bb_lower_series[i]
+        c_i = closes[i]
+        if math.isnan(mid_i) or math.isnan(up_i) or math.isnan(lo_i) or mid_i == 0:
+            continue
+        span = max(1e-9, up_i - lo_i)
+        # 1.0 when candle is at/above upper band; degrades as it moves away.
+        bull_prox.append(max(0.0, min(1.0, 1.0 - ((up_i - c_i) / (0.40 * span)))))
+        # 1.0 when candle is at/below lower band; degrades as it moves away.
+        bear_prox.append(max(0.0, min(1.0, 1.0 - ((c_i - lo_i) / (0.40 * span)))))
+        bw_i = (up_i - lo_i) / mid_i
+        if not math.isnan(prev_bw_step):
+            bw_steps += 1
+            if bw_i >= prev_bw_step:
+                bw_up_steps += 1
+        prev_bw_step = bw_i
+    prox_bull = (sum(bull_prox) / len(bull_prox)) if bull_prox else 0.0
+    prox_bear = (sum(bear_prox) / len(bear_prox)) if bear_prox else 0.0
+    widen_consistency = (bw_up_steps / bw_steps) if bw_steps > 0 else 0.0
+    bull_band_ride_score = max(0.0, min(1.0, (0.7 * prox_bull) + (0.3 * widen_consistency)))
+    bear_band_ride_score = max(0.0, min(1.0, (0.7 * prox_bear) + (0.3 * widen_consistency)))
     # Course timing rule: BB widening should begin roughly 5-14 bars before setup maturity.
     band_widen_start_age = 999
     band_widen_window_ok = False
@@ -1603,6 +1658,63 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
 
     rr_mid = (target_mid_pct / risk_pct) if risk_pct > 0 else 0.0
 
+    # Lifecycle state machine for "fat pitch" progression:
+    # Phase 2: band spreads while candles ride the active outer band.
+    # Phase 3: momentum crosses align (or one is imminently aligning).
+    # Phase 4: liftoff/rejection from the band after confirmation.
+    macd_up_recent = macd_cross_age <= 3
+    macd_down_recent = macd_bear_cross_age <= 3
+    stoch_up_recent = stoch_cross_age <= 3
+    stoch_down_recent = stoch_bear_cross_age <= 3
+    macd_up_pending = (macd_gap_prev < 0 and macd_gap_now > macd_gap_prev and macd_line <= macd_signal)
+    macd_down_pending = (macd_gap_prev > 0 and macd_gap_now < macd_gap_prev and macd_line >= macd_signal)
+    spread_recent = band_widen_window_ok or band_width_double_recent_ok
+    bull_phase2 = spread_recent and bull_band_ride_score >= 0.58 and touched_lower and outer_touch_age <= 14
+    bear_phase2 = spread_recent and bear_band_ride_score >= 0.58 and touched_upper and outer_touch_age <= 14
+    bull_phase3 = bull_phase2 and stoch_up_recent and (macd_up_recent or macd_up_pending)
+    bear_phase3 = bear_phase2 and stoch_down_recent and (macd_down_recent or macd_down_pending)
+    bull_phase4 = bull_phase3 and liftoff_from_band and macd_up_recent and stoch_up_recent
+    bear_phase4 = bear_phase3 and rejection_from_band and macd_down_recent and stoch_down_recent
+
+    if setup_direction == "bull":
+        if bull_phase4:
+            lifecycle_phase = 4
+            lifecycle_stage = "P4 Confirmed Liftoff"
+        elif bull_phase3:
+            lifecycle_phase = 3
+            lifecycle_stage = "P3 Cross Confirming"
+        elif bull_phase2:
+            lifecycle_phase = 2
+            lifecycle_stage = "P2 Ride+Spread"
+        else:
+            lifecycle_phase = 1
+            lifecycle_stage = "P1 Pre-Setup"
+        lifecycle_score = (
+            (25.0 * lifecycle_phase)
+            + (20.0 * max(0.0, min(1.0, bull_band_ride_score)))
+            + (10.0 if spread_recent else 0.0)
+            + (5.0 if macd_up_pending else 0.0)
+        )
+    else:
+        if bear_phase4:
+            lifecycle_phase = 4
+            lifecycle_stage = "P4 Confirmed Rejection"
+        elif bear_phase3:
+            lifecycle_phase = 3
+            lifecycle_stage = "P3 Cross Confirming"
+        elif bear_phase2:
+            lifecycle_phase = 2
+            lifecycle_stage = "P2 Ride+Spread"
+        else:
+            lifecycle_phase = 1
+            lifecycle_stage = "P1 Pre-Setup"
+        lifecycle_score = (
+            (25.0 * lifecycle_phase)
+            + (20.0 * max(0.0, min(1.0, bear_band_ride_score)))
+            + (10.0 if spread_recent else 0.0)
+            + (5.0 if macd_down_pending else 0.0)
+        )
+
     def _clamp01(v: float) -> float:
         return max(0.0, min(1.0, v))
 
@@ -1620,6 +1732,7 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         + 10.0 * rr_quality
         + 10.0 * liq_quality
     )
+    options_setup_score = max(options_setup_score, lifecycle_score)
     bb_compression_score = 0.0
     if not math.isnan(bw_now) and not math.isnan(bw_median) and bw_median > 0:
         bb_compression_score = _clamp01((bw_median - bw_now) / bw_median)
@@ -1728,6 +1841,9 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         target_band_pct=target_band_pct,
         risk_pct=risk_pct,
         rr_mid=rr_mid,
+        lifecycle_stage=lifecycle_stage,
+        lifecycle_phase=lifecycle_phase,
+        lifecycle_score=lifecycle_score,
         options_setup_score=options_setup_score,
         course_pattern_score=course_pattern_score,
         bb_compression_score=bb_compression_score,
@@ -1741,6 +1857,8 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         band_width_vs_prev_month=band_width_vs_prev_month,
         band_width_double_age=band_width_double_age,
         band_width_double_recent_ok=band_width_double_recent_ok,
+        bull_band_ride_score=bull_band_ride_score,
+        bear_band_ride_score=bear_band_ride_score,
         band_widen_start_age=band_widen_start_age,
         band_widen_window_ok=band_widen_window_ok,
         liftoff_from_band=liftoff_from_band,
@@ -1775,6 +1893,8 @@ def _passes_directional_setup(
     require_macd_stoch_cross = args.require_macd_stoch_cross
     require_band_liftoff = args.require_band_liftoff
     bb_spread_watchlist = getattr(args, "bb_spread_watchlist", False)
+    require_band_ride = bool(getattr(args, "require_band_ride", False))
+    min_band_ride_score = max(0.0, min(1.0, float(getattr(args, "min_band_ride_score", 0.62))))
     require_simultaneous_cross = args.require_simultaneous_cross
     # Hard recency ceiling: only current/potential setups near present are allowed.
     recent_cross_limit = 3
@@ -1903,6 +2023,12 @@ def _passes_directional_setup(
         bull_ok = bull_ok and (bull_bb_spread_ok and result.pre3x_bull_score >= 6.0)
         bear_ok = bear_ok and (bear_bb_spread_ok and result.pre3x_bear_score >= 6.0)
 
+    if require_band_ride:
+        bull_ok = bull_ok and (result.bull_band_ride_score >= min_band_ride_score)
+        bear_ok = bear_ok and (result.bear_band_ride_score >= min_band_ride_score)
+        bull_ok = bull_ok and (int(getattr(result, "lifecycle_phase", 0)) >= 2)
+        bear_ok = bear_ok and (int(getattr(result, "lifecycle_phase", 0)) >= 2)
+
     # Only apply full options viability gates on primary (daily) timeframe.
     if not secondary_confirmation:
         if bb_spread_watchlist and not require_band_liftoff:
@@ -1937,8 +2063,8 @@ def _passes_directional_setup(
         bear_ok = bear_ok and (result.band_width_vs_prev_month >= min_band_vs_prev_month)
         bull_ok = bull_ok and (result.band_width_double_age <= max_band_double_age)
         bear_ok = bear_ok and (result.band_width_double_age <= max_band_double_age)
-        # Enforce user rule: widening should start about 5-14 bars before "ready" setups.
-        if result.timeframe == "1D":
+        # Enforce widening-window timing when enabled for this tier.
+        if result.timeframe == "1D" and bool(getattr(args, "require_band_widen_window", True)):
             bull_ok = bull_ok and bool(getattr(result, "band_widen_window_ok", False))
             bear_ok = bear_ok and bool(getattr(result, "band_widen_window_ok", False))
 

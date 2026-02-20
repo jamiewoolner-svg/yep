@@ -278,7 +278,8 @@
         (num(row.raw_hist_wr, num(row.hist_wr, 0) / 100.0) * 100.0) +
         (Math.max(0, num(row.raw_bb_expansion, num(row.bb_expansion, 0))) * 300.0) +
         (num(row.raw_pattern_similarity, num(row.pattern_similarity, 0) / 100.0) * 1000.0) +
-        (num(row.raw_course_score, num(row.course_score, 0)) * 20.0)
+        (num(row.raw_course_score, num(row.course_score, 0)) * 20.0) +
+        (num(row.raw_lifecycle_score, num(row.lifecycle_score, 0)) * 40.0)
       );
     }
 
@@ -311,13 +312,16 @@
           <div class="signal-meta">
             <span class="pill ${dirClass}">${model.row.dir}</span>
             <span class="pill">${model.row.setup}</span>
+            <span class="pill">Phase ${num(model.row.phase, 1)} ${model.row.stage || ''}</span>
             <span class="pill">Score ${num(model.row.setup_score, 0).toFixed(1)}</span>
+            <span class="pill">Life ${num(model.row.lifecycle_score, 0).toFixed(1)}</span>
             <span class="pill">BBExp ${num(model.row.bb_expansion, 0).toFixed(3)}</span>
             <span class="pill">BBNow ${num(model.row.bb_width_now, 0).toFixed(3)}</span>
             <span class="pill">BBPct ${num(model.row.bb_width_pct, 0).toFixed(1)}%</span>
             <span class="pill">BBSlope3 ${num(model.row.bb_slope3, 0).toFixed(4)}</span>
             <span class="pill">BBxMonth ${num(model.row.bb_vs_prev_month, 0).toFixed(2)}x</span>
             <span class="pill">BB2xAge ${num(model.row.bb_double_age, 999)}d</span>
+            <span class="pill">BandRide ${num(model.row.band_ride_score, 0).toFixed(2)}</span>
             <span class="pill">${bbWindowOk ? 'BBW 5-14d OK' : `BBW start ${bbStartAge}d`}</span>
           </div>
         </div>

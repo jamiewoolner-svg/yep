@@ -456,6 +456,7 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
     raw_pattern_similarity = float(getattr(analyzed, "pattern_similarity", 0.0) or 0.0)
     raw_pattern_direct = float(getattr(analyzed, "pattern_similarity_direct", 0.0) or 0.0)
     raw_course_score = float(getattr(analyzed, "course_pattern_score", 0.0) or 0.0)
+    raw_lifecycle_score = float(getattr(analyzed, "lifecycle_score", 0.0) or 0.0)
     rank_score = (
         (raw_setup_score * 1000.0)
         + (raw_score * 10.0)
@@ -464,11 +465,14 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         + (max(0.0, raw_bb_expansion) * 300.0)
         + (raw_pattern_similarity * PATTERN_REF_WEIGHT)
         + (raw_course_score * 20.0)
+        + (raw_lifecycle_score * 40.0)
     )
     return {
         "symbol": analyzed.symbol,
         "dir": str(getattr(analyzed, "setup_direction", "n/a")).upper(),
         "setup": str(getattr(analyzed, "setup_type", "n/a")),
+        "stage": str(getattr(analyzed, "lifecycle_stage", "P1 Pre-Setup")),
+        "phase": int(getattr(analyzed, "lifecycle_phase", 1)),
         "close": _safe_num(analyzed.close, 2),
         "sma50": _safe_num(analyzed.sma50, 2),
         "sma89": _safe_num(analyzed.sma89, 2),
@@ -488,6 +492,12 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "bb_vs_prev_month": _safe_num(getattr(analyzed, "band_width_vs_prev_month", 0.0), 2),
         "bb_double_age": int(getattr(analyzed, "band_width_double_age", 999)),
         "bb_double_recent_ok": bool(getattr(analyzed, "band_width_double_recent_ok", False)),
+        "band_ride_score": _safe_num(
+            getattr(analyzed, "bull_band_ride_score", 0.0)
+            if str(getattr(analyzed, "setup_direction", "bull")).lower() == "bull"
+            else getattr(analyzed, "bear_band_ride_score", 0.0),
+            3,
+        ),
         "bb_widen_start_age": int(getattr(analyzed, "band_widen_start_age", 999)),
         "bb_widen_window_ok": bool(getattr(analyzed, "band_widen_window_ok", False)),
         "pre3x": _safe_num(max(analyzed.pre3x_bull_score, analyzed.pre3x_bear_score), 2),
@@ -499,6 +509,7 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "risk": _safe_num(getattr(analyzed, "risk_pct", 0.0) * 100.0, 2),
         "rr": _safe_num(getattr(analyzed, "rr_mid", 0.0), 2),
         "setup_score": _safe_num(raw_setup_score, 1),
+        "lifecycle_score": _safe_num(raw_lifecycle_score, 1),
         "course_score": _safe_num(raw_course_score, 1),
         "dollar_volume": format_money(analyzed.dollar_volume20),
         "score": _safe_num(raw_score, 3),
@@ -508,6 +519,7 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "raw_hist_wr": raw_hist_wr,
         "raw_bb_expansion": raw_bb_expansion,
         "raw_course_score": raw_course_score,
+        "raw_lifecycle_score": raw_lifecycle_score,
         "pattern_similarity": _safe_num(raw_pattern_similarity * 100.0, 1),
         "raw_pattern_similarity": raw_pattern_similarity,
         "pattern_mode": str(getattr(analyzed, "setup_direction", "n/a")).upper(),
@@ -545,6 +557,10 @@ def _strategy_args() -> SimpleNamespace:
         min_band_slope3=0.0,
         min_band_vs_prev_month=2.0,
         max_band_double_age=14,
+        require_band_ride=True,
+        min_band_ride_score=0.62,
+        band_ride_lookback=8,
+        require_band_widen_window=True,
         min_target_band_pct=0.01,
         min_course_pattern_score=55.0,
         max_setup_age=3,
@@ -664,7 +680,8 @@ def _ranked_scan_args() -> SimpleNamespace:
     args.max_stoch_rsi_k = max(args.max_stoch_rsi_k, 95.0)
     args.min_dollar_volume = min(args.min_dollar_volume, 1_000_000.0)
     args.min_band_expansion = max(args.min_band_expansion, 0.10)
-    args.band_touch_lookback = min(args.band_touch_lookback, 3)
+    # Align with "within 2 weeks" BB timing rule.
+    args.band_touch_lookback = max(args.band_touch_lookback, 14)
     args.min_course_pattern_score = max(float(getattr(args, "min_course_pattern_score", 55.0)), 62.0)
 
     # Align scan emphasis with course seasonality:
@@ -988,6 +1005,38 @@ def scan_stream() -> Response:
         strict = float(getattr(base_args, "min_course_pattern_score", 62.0))
         parsed_tiers = [strict, max(56.0, strict - 4.0), 50.0]
     course_score_tiers = sorted({max(0.0, t) for t in parsed_tiers}, reverse=True)
+    # Coverage tiers: keep strict rules in tier 1, then relax BB gates gradually.
+    bb_multiple_tiers = [
+        float(getattr(base_args, "min_band_vs_prev_month", 2.0)),
+        max(1.8, float(getattr(base_args, "min_band_vs_prev_month", 2.0)) - 0.2),
+        1.6,
+    ]
+    bb_age_tiers = [
+        int(getattr(base_args, "max_band_double_age", 14)),
+        max(16, int(getattr(base_args, "max_band_double_age", 14)) + 4),
+        22,
+    ]
+    bb_width_now_tiers = [
+        float(getattr(base_args, "min_band_width_now", 0.08)),
+        0.07,
+        0.06,
+    ]
+    bb_pct_tiers = [
+        float(getattr(base_args, "min_band_width_percentile", 0.60)),
+        0.55,
+        0.50,
+    ]
+    band_ride_tiers = [
+        float(getattr(base_args, "min_band_ride_score", 0.62)),
+        0.58,
+        0.52,
+    ]
+    band_touch_lookback_tiers = [
+        int(getattr(base_args, "band_touch_lookback", 14)),
+        14,
+        20,
+    ]
+    require_widen_window_tiers = [True, True, False]
     reference_symbol = PATTERN_REF_SYMBOL_DEFAULT
     reference_pattern = None
     reference_error = ""
@@ -1036,11 +1085,27 @@ def scan_stream() -> Response:
             final_tier_label = tier_label
             tier_args = copy.deepcopy(base_args)
             tier_args.min_course_pattern_score = float(tier_score)
+            tier_i = min(idx, len(bb_multiple_tiers) - 1)
+            tier_args.min_band_vs_prev_month = bb_multiple_tiers[tier_i]
+            tier_args.max_band_double_age = bb_age_tiers[tier_i]
+            tier_args.min_band_width_now = bb_width_now_tiers[tier_i]
+            tier_args.min_band_width_percentile = bb_pct_tiers[tier_i]
+            tier_args.band_touch_lookback = band_touch_lookback_tiers[tier_i]
+            tier_args.require_band_widen_window = require_widen_window_tiers[tier_i]
+            tier_args.require_band_ride = True
+            tier_args.min_band_ride_score = band_ride_tiers[tier_i]
             if idx > 0:
                 yield json.dumps(
                     {
                         "type": "status",
-                        "message": f"Relaxing course score gate to {tier_score:.1f} to improve coverage.",
+                        "message": (
+                            f"Relaxing gates: course>={tier_score:.1f}, "
+                            f"BBxMonth>={tier_args.min_band_vs_prev_month:.2f}, "
+                            f"BB2xAge<={tier_args.max_band_double_age}d, "
+                            f"BBNow>={tier_args.min_band_width_now:.3f}, "
+                            f"touch<={tier_args.band_touch_lookback}d, "
+                            f"BandRide>={tier_args.min_band_ride_score:.2f}"
+                        ),
                         "tier": tier_label,
                     }
                 ) + "\n"
@@ -1048,7 +1113,12 @@ def scan_stream() -> Response:
                 yield json.dumps(
                     {
                         "type": "status",
-                        "message": f"Strict course score gate: {tier_score:.1f}",
+                        "message": (
+                            f"Strict gates: course>={tier_score:.1f}, "
+                            f"BBxMonth>={tier_args.min_band_vs_prev_month:.2f}, "
+                            f"BB2xAge<={tier_args.max_band_double_age}d, "
+                            f"BandRide>={tier_args.min_band_ride_score:.2f}"
+                        ),
                         "tier": tier_label,
                     }
                 ) + "\n"
