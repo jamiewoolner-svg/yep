@@ -488,6 +488,8 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "bb_width_now": _safe_num(getattr(analyzed, "band_width_now", 0.0), 3),
         "bb_width_pct": _safe_num(getattr(analyzed, "band_width_percentile", 0.0) * 100.0, 1),
         "bb_slope3": _safe_num(getattr(analyzed, "band_width_slope3", 0.0), 4),
+        "bb_osc": _safe_num(getattr(analyzed, "band_oscillation_score", 0.0), 3),
+        "bb_regime": bool(getattr(analyzed, "band_widening_regime", False)),
         "bb_prev_month_avg": _safe_num(getattr(analyzed, "band_width_prev_month_avg", 0.0), 3),
         "bb_vs_prev_month": _safe_num(getattr(analyzed, "band_width_vs_prev_month", 0.0), 2),
         "bb_double_age": int(getattr(analyzed, "band_width_double_age", 999)),
@@ -555,6 +557,8 @@ def _strategy_args() -> SimpleNamespace:
         min_band_width_now=0.08,
         min_band_width_percentile=0.60,
         min_band_slope3=0.0,
+        require_widening_oscillation=True,
+        min_band_oscillation_score=0.35,
         min_band_vs_prev_month=2.0,
         max_band_double_age=14,
         require_band_ride=True,
@@ -1068,6 +1072,11 @@ def scan_stream() -> Response:
         0.50,
         0.35,
     ]
+    bb_osc_tiers = [
+        float(getattr(base_args, "min_band_oscillation_score", 0.35)),
+        0.28,
+        0.20,
+    ]
     band_ride_tiers = [
         float(getattr(base_args, "min_band_ride_score", 0.62)),
         0.52,
@@ -1080,6 +1089,7 @@ def scan_stream() -> Response:
     ]
     require_widen_window_tiers = [True, False, False]
     require_band_ride_tiers = [True, True, False]
+    require_oscillation_tiers = [True, True, False]
     reference_symbol = PATTERN_REF_SYMBOL_DEFAULT
     reference_pattern = None
     reference_error = ""
@@ -1137,6 +1147,8 @@ def scan_stream() -> Response:
             tier_args.require_band_widen_window = require_widen_window_tiers[tier_i]
             tier_args.require_band_ride = require_band_ride_tiers[tier_i]
             tier_args.min_band_ride_score = band_ride_tiers[tier_i]
+            tier_args.require_widening_oscillation = require_oscillation_tiers[tier_i]
+            tier_args.min_band_oscillation_score = bb_osc_tiers[tier_i]
             tier_args.recent_daily_bars = 15
             tier_args.recent_233_bars = 15
             if idx > 0:
@@ -1149,7 +1161,8 @@ def scan_stream() -> Response:
                             f"BB2xAge<={tier_args.max_band_double_age}d, "
                             f"BBNow>={tier_args.min_band_width_now:.3f}, "
                             f"touch<={tier_args.band_touch_lookback}d, "
-                            f"BandRide>={'off' if not tier_args.require_band_ride else f'{tier_args.min_band_ride_score:.2f}'}"
+                            f"BandRide>={'off' if not tier_args.require_band_ride else f'{tier_args.min_band_ride_score:.2f}'}, "
+                            f"BBOsc>={'off' if not tier_args.require_widening_oscillation else f'{tier_args.min_band_oscillation_score:.2f}'}"
                         ),
                         "tier": tier_label,
                     }
@@ -1162,7 +1175,8 @@ def scan_stream() -> Response:
                             f"Strict gates: course>={tier_score:.1f}, "
                             f"BBxMonth>={tier_args.min_band_vs_prev_month:.2f}, "
                             f"BB2xAge<={tier_args.max_band_double_age}d, "
-                            f"BandRide>={tier_args.min_band_ride_score:.2f}"
+                            f"BandRide>={tier_args.min_band_ride_score:.2f}, "
+                            f"BBOsc>={tier_args.min_band_oscillation_score:.2f}"
                         ),
                         "tier": tier_label,
                     }

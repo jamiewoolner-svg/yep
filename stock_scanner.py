@@ -128,6 +128,8 @@ class ScanResult:
     band_width_now: float
     band_width_percentile: float
     band_width_slope3: float
+    band_oscillation_score: float
+    band_widening_regime: bool
     band_width_prev_month_avg: float
     band_width_vs_prev_month: float
     band_width_double_age: int
@@ -295,6 +297,17 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Minimum 3-bar BB width slope (bw_now - bw_3bars_ago) to ensure widening is active.",
+    )
+    parser.add_argument(
+        "--require-widening-oscillation",
+        action="store_true",
+        help="Require Bollinger-width oscillation with an active widening leg before momentum filters.",
+    )
+    parser.add_argument(
+        "--min-band-oscillation-score",
+        type=float,
+        default=0.35,
+        help="Minimum oscillation score (0-1) from recent BB width swings.",
     )
     parser.add_argument(
         "--min-band-vs-prev-month",
@@ -1495,6 +1508,46 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     band_width_slope3 = 0.0
     if not math.isnan(bw_now) and not math.isnan(bw_3ago):
         band_width_slope3 = float(bw_now - bw_3ago)
+    # Oscillation model: BB width should swing, then enter a widening leg.
+    recent_points: list[tuple[int, float]] = sorted(
+        [(i, v) for i, v in bw_by_idx.items() if i >= max(0, last_idx - 21)],
+        key=lambda x: x[0],
+    )
+    band_oscillation_score = 0.0
+    band_widening_regime = False
+    if len(recent_points) >= 8:
+        vals = [v for _, v in recent_points]
+        deltas = [vals[i] - vals[i - 1] for i in range(1, len(vals))]
+        eps = max(1e-6, abs(vals[-1]) * 0.005)
+        signs: list[int] = []
+        for d in deltas:
+            if d > eps:
+                signs.append(1)
+            elif d < -eps:
+                signs.append(-1)
+            else:
+                signs.append(0)
+        changes = 0
+        prev = 0
+        for s in signs:
+            if s == 0:
+                continue
+            if prev != 0 and s != prev:
+                changes += 1
+            prev = s
+        # 0..1 scaled by number of meaningful direction changes.
+        band_oscillation_score = max(0.0, min(1.0, changes / 4.0))
+        # Active widening leg: recent trough followed by growth + non-negative near-term slope.
+        tail = recent_points[-10:]
+        trough_idx, trough_bw = min(tail, key=lambda x: x[1])
+        widening_gain = ((bw_now - trough_bw) / trough_bw) if (not math.isnan(bw_now) and trough_bw > 0) else 0.0
+        trough_age = last_idx - trough_idx
+        band_widening_regime = bool(
+            band_oscillation_score >= 0.35
+            and trough_age <= 10
+            and widening_gain >= 0.06
+            and band_width_slope3 >= -0.001
+        )
     # "Month before" baseline: prior 20 trading bars, excluding the most recent 14 bars.
     prior_month_start = max(0, last_idx - 34)
     prior_month_end = max(0, last_idx - 14)
@@ -1695,6 +1748,7 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     spread_recent = (
         band_widen_window_ok
         or band_width_double_recent_ok
+        or band_widening_regime
         or (band_width_slope3 >= 0 and band_width_percentile >= 0.50 and outer_touch_age <= 14)
     )
     bull_phase2 = spread_recent and bull_band_ride_score >= 0.50 and touched_lower and outer_touch_age <= 14
@@ -1893,6 +1947,8 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         band_width_now=bw_now_safe,
         band_width_percentile=band_width_percentile,
         band_width_slope3=band_width_slope3,
+        band_oscillation_score=band_oscillation_score,
+        band_widening_regime=band_widening_regime,
         band_width_prev_month_avg=(0.0 if math.isnan(band_width_prev_month_avg) else float(band_width_prev_month_avg)),
         band_width_vs_prev_month=band_width_vs_prev_month,
         band_width_double_age=band_width_double_age,
@@ -1937,6 +1993,8 @@ def _passes_directional_setup(
     bb_spread_watchlist = getattr(args, "bb_spread_watchlist", False)
     require_band_ride = bool(getattr(args, "require_band_ride", False))
     min_band_ride_score = max(0.0, min(1.0, float(getattr(args, "min_band_ride_score", 0.62))))
+    require_widening_oscillation = bool(getattr(args, "require_widening_oscillation", False))
+    min_band_oscillation_score = max(0.0, min(1.0, float(getattr(args, "min_band_oscillation_score", 0.35))))
     require_simultaneous_cross = args.require_simultaneous_cross
     # Hard recency ceiling: only current/potential setups near present are allowed.
     recent_cross_limit = 3
@@ -2081,6 +2139,11 @@ def _passes_directional_setup(
         bear_ok = bear_ok and (result.bear_band_ride_score >= min_band_ride_score)
         bull_ok = bull_ok and (int(getattr(result, "lifecycle_phase", 0)) >= 2)
         bear_ok = bear_ok and (int(getattr(result, "lifecycle_phase", 0)) >= 2)
+    if require_widening_oscillation:
+        bull_ok = bull_ok and bool(getattr(result, "band_widening_regime", False))
+        bear_ok = bear_ok and bool(getattr(result, "band_widening_regime", False))
+        bull_ok = bull_ok and (float(getattr(result, "band_oscillation_score", 0.0)) >= min_band_oscillation_score)
+        bear_ok = bear_ok and (float(getattr(result, "band_oscillation_score", 0.0)) >= min_band_oscillation_score)
 
     # Only apply full options viability gates on primary (daily) timeframe.
     if not secondary_confirmation:
