@@ -643,6 +643,26 @@ def _ranked_scan_args() -> SimpleNamespace:
     args.min_band_expansion = max(args.min_band_expansion, 0.08)
     args.band_touch_lookback = min(args.band_touch_lookback, 3)
     args.min_course_pattern_score = max(float(getattr(args, "min_course_pattern_score", 55.0)), 62.0)
+
+    # Align scan emphasis with course seasonality:
+    # Oct-Jan: prefer larger daily/233 swings; May-Sep: favor smaller intraday swings.
+    month = date.today().month
+    if month in (10, 11, 12, 1):
+        args.require_daily_and_233 = True
+        args.require_weekly_context = True
+        args.require_hourly = False
+        args.cross_lookback = min(args.cross_lookback, 10)
+    elif month in (5, 6, 7, 8, 9):
+        args.require_daily_and_233 = False
+        args.require_weekly_context = False
+        args.require_hourly = True
+        args.cross_lookback = max(args.cross_lookback, 12)
+    else:
+        # Transition season: allow both contexts but keep quality floor high.
+        args.require_daily_and_233 = True
+        args.require_weekly_context = False
+        args.require_hourly = True
+        args.cross_lookback = max(args.cross_lookback, 10)
     return args
 
 
@@ -660,7 +680,7 @@ def _sim_by_distance(a: float, b: float, scale: float) -> float:
     return _clamp01(1.0 - (abs(a - b) / scale))
 
 
-def _build_reference_pattern(symbol: str = "IBM") -> Any | None:
+def _build_reference_pattern(symbol: str = "GOOGL") -> Any | None:
     candles = fetch_history(symbol)
     if len(candles) < 120:
         return None
@@ -937,6 +957,14 @@ def scan_stream() -> Response:
         found = 0
         total_symbols = len(symbols)
         yield json.dumps({"type": "status", "message": f"Universe size: {total_symbols} symbols"}) + "\n"
+        m = date.today().month
+        if m in (10, 11, 12, 1):
+            season_mode = "Fall/Winter profile: Daily+233 with weekly context"
+        elif m in (5, 6, 7, 8, 9):
+            season_mode = "Summer profile: Intraday emphasis (55m and lower)"
+        else:
+            season_mode = "Transition profile: blended Daily/233 and intraday"
+        yield json.dumps({"type": "status", "message": season_mode}) + "\n"
         if reference_pattern:
             yield json.dumps(
                 {
