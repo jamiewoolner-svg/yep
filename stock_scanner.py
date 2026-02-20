@@ -87,6 +87,8 @@ class ScanResult:
     macd_signal: float
     macd_gap_now: float
     macd_gap_prev: float
+    stoch_gap_now: float
+    stoch_gap_prev: float
     adx14: float
     plus_di14: float
     minus_di14: float
@@ -1610,6 +1612,8 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         macd_signal=macd_signal,
         macd_gap_now=macd_gap_now,
         macd_gap_prev=macd_gap_prev,
+        stoch_gap_now=stoch_gap_now,
+        stoch_gap_prev=stoch_gap_prev,
         adx14=adx14,
         plus_di14=plus_di14,
         minus_di14=minus_di14,
@@ -1724,38 +1728,52 @@ def _passes_directional_setup(
 
     # Core timing rule: MACD cross must be recent or imminently approaching within 3 bars.
     macd_gap_thresh = max(0.03, abs(result.macd_signal) * 0.25)
+    bull_macd_cross_up = (
+        result.macd_cross_age <= max_macd_cross_age
+        and result.macd_cross_age <= result.macd_bear_cross_age
+    )
+    bear_macd_cross_down = (
+        result.macd_bear_cross_age <= max_macd_cross_age
+        and result.macd_bear_cross_age <= result.macd_cross_age
+    )
     bull_macd_imminent = (
         result.macd <= result.macd_signal
         and result.macd_gap_prev < 0
         and result.macd_gap_now > result.macd_gap_prev
-        and abs(result.macd_gap_now) <= macd_gap_thresh
+        and result.macd_gap_now >= -macd_gap_thresh
     )
     bear_macd_imminent = (
         result.macd >= result.macd_signal
         and result.macd_gap_prev > 0
         and result.macd_gap_now < result.macd_gap_prev
-        and abs(result.macd_gap_now) <= macd_gap_thresh
+        and result.macd_gap_now <= macd_gap_thresh
     )
-    bull_ok = bull_ok and (result.macd_cross_age <= max_macd_cross_age or bull_macd_imminent)
-    bear_ok = bear_ok and (result.macd_bear_cross_age <= max_macd_cross_age or bear_macd_imminent)
+    bull_ok = bull_ok and (bull_macd_cross_up or bull_macd_imminent)
+    bear_ok = bear_ok and (bear_macd_cross_down or bear_macd_imminent)
 
-    stoch_gap_now = float(result.stoch_rsi_k - result.stoch_rsi_d)
-    if any(math.isnan(v) for v in (result.stoch_rsi_k, result.stoch_rsi_d)):
-        stoch_gap_now = 0.0
-    # Approximate prior delta from known cross age trend: if cross is stale, demand very tight current gap.
     stoch_gap_thresh = 4.0
+    bull_stoch_cross_up = (
+        result.stoch_cross_age <= max_stoch_cross_age
+        and result.stoch_cross_age <= result.stoch_bear_cross_age
+    )
+    bear_stoch_cross_down = (
+        result.stoch_bear_cross_age <= max_stoch_cross_age
+        and result.stoch_bear_cross_age <= result.stoch_cross_age
+    )
     bull_stoch_imminent = (
         result.stoch_rsi_k <= result.stoch_rsi_d
-        and stoch_gap_now >= -stoch_gap_thresh
-        and (result.stoch_cross_age <= max_stoch_cross_age + 2 or result.stoch_rsi_k > POWS_STOCH_OS)
+        and result.stoch_gap_prev < 0
+        and result.stoch_gap_now > result.stoch_gap_prev
+        and result.stoch_gap_now >= -stoch_gap_thresh
     )
     bear_stoch_imminent = (
         result.stoch_rsi_k >= result.stoch_rsi_d
-        and stoch_gap_now <= stoch_gap_thresh
-        and (result.stoch_bear_cross_age <= max_stoch_cross_age + 2 or result.stoch_rsi_k < POWS_STOCH_OB)
+        and result.stoch_gap_prev > 0
+        and result.stoch_gap_now < result.stoch_gap_prev
+        and result.stoch_gap_now <= stoch_gap_thresh
     )
-    bull_ok = bull_ok and (result.stoch_cross_age <= max_stoch_cross_age or bull_stoch_imminent)
-    bear_ok = bear_ok and (result.stoch_bear_cross_age <= max_stoch_cross_age or bear_stoch_imminent)
+    bull_ok = bull_ok and (bull_stoch_cross_up or bull_stoch_imminent)
+    bear_ok = bear_ok and (bear_stoch_cross_down or bear_stoch_imminent)
 
     # Pre-liftoff discovery path for setups that can evolve into 3x confirmation.
     spread_floor = max(0.0, args.min_band_expansion)
