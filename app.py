@@ -888,8 +888,11 @@ def _passes_candidate_floor(result: Any, args: SimpleNamespace) -> bool:
         return False
     if not (float(getattr(args, "min_price", 5.0)) <= close <= float(getattr(args, "max_price", 1000.0))):
         return False
-    if float(getattr(result, "dollar_volume20", 0.0) or 0.0) < 500_000.0:
+    if float(getattr(result, "dollar_volume20", 0.0) or 0.0) < 250_000.0:
         return False
+    # In force-candidate mode, ranking handles quality; floor only enforces tradable liquidity.
+    if bool(getattr(args, "force_candidate_mode", False)):
+        return True
     recent = int(getattr(args, "recent_daily_bars", 30) or 30)
     if _recent_lifecycle_window_ok(result, recent):
         return True
@@ -898,8 +901,8 @@ def _passes_candidate_floor(result: Any, args: SimpleNamespace) -> bool:
         cross_age = min(int(getattr(result, "macd_bear_cross_age", 999)), int(getattr(result, "stoch_bear_cross_age", 999)))
     else:
         cross_age = min(int(getattr(result, "macd_cross_age", 999)), int(getattr(result, "stoch_cross_age", 999)))
-    near_cross = abs(float(getattr(result, "macd_gap_now", 0.0) or 0.0)) <= 0.20 or abs(float(getattr(result, "stoch_gap_now", 0.0) or 0.0)) <= 12.0
-    return bool(cross_age <= max(6, recent) or near_cross)
+    near_cross = abs(float(getattr(result, "macd_gap_now", 0.0) or 0.0)) <= 0.25 or abs(float(getattr(result, "stoch_gap_now", 0.0) or 0.0)) <= 14.0
+    return bool(cross_age <= max(8, recent) or near_cross)
 
 
 def _precision_entry_ok(intraday: list[Candle], daily: Any, args: SimpleNamespace) -> bool:
@@ -1143,6 +1146,7 @@ def scan_stream() -> Response:
             a.require_band_widen_window = False
             a.require_widening_oscillation = False
             a.min_course_pattern_score = max(25.0, float(getattr(a, "min_course_pattern_score", 62.0)) - 20.0)
+            a.force_candidate_mode = True
         if step >= 3:
             a.require_band_ride = False
             a.min_band_vs_prev_month = min(float(getattr(a, "min_band_vs_prev_month", 2.0)), 1.4)
