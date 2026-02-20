@@ -1033,63 +1033,25 @@ def scan_stream() -> Response:
     base_args = _ranked_scan_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = max(0, int(base_args.max_retries))
-    min_target_matches = max(1, int(os.getenv("MIN_TARGET_MATCHES", "8")))
-    fallback_raw = str(os.getenv("COURSE_SCORE_FALLBACKS", "")).strip()
-    if fallback_raw:
-        parsed_tiers: list[float] = []
-        for item in fallback_raw.split(","):
-            item = item.strip()
-            if not item:
-                continue
-            try:
-                parsed_tiers.append(float(item))
-            except ValueError:
-                continue
-        if not parsed_tiers:
-            parsed_tiers = [float(getattr(base_args, "min_course_pattern_score", 62.0)), 56.0, 50.0]
-    else:
-        strict = float(getattr(base_args, "min_course_pattern_score", 62.0))
-        parsed_tiers = [strict, 50.0, 35.0]
-    course_score_tiers = sorted({max(0.0, t) for t in parsed_tiers}, reverse=True)
-    # Coverage tiers: keep strict rules in tier 1, then relax BB gates gradually.
-    bb_multiple_tiers = [
-        float(getattr(base_args, "min_band_vs_prev_month", 2.0)),
-        1.6,
-        1.1,
-    ]
-    bb_age_tiers = [
-        int(getattr(base_args, "max_band_double_age", 14)),
-        20,
-        28,
-    ]
-    bb_width_now_tiers = [
-        float(getattr(base_args, "min_band_width_now", 0.08)),
-        0.06,
-        0.03,
-    ]
-    bb_pct_tiers = [
-        float(getattr(base_args, "min_band_width_percentile", 0.60)),
-        0.50,
-        0.35,
-    ]
-    bb_osc_tiers = [
-        float(getattr(base_args, "min_band_oscillation_score", 0.35)),
-        0.28,
-        0.20,
-    ]
-    band_ride_tiers = [
-        float(getattr(base_args, "min_band_ride_score", 0.62)),
-        0.52,
-        0.42,
-    ]
-    band_touch_lookback_tiers = [
-        int(getattr(base_args, "band_touch_lookback", 14)),
-        14,
-        20,
-    ]
-    require_widen_window_tiers = [True, False, False]
-    require_band_ride_tiers = [True, True, False]
-    require_oscillation_tiers = [True, True, False]
+    scan_args = copy.deepcopy(base_args)
+    # Single-pass "as found" mode: broad enough to avoid zero-result scans.
+    scan_args.allow_momentum_watchlist = True
+    scan_args.pows = False
+    scan_args.require_band_ride = False
+    scan_args.require_widening_oscillation = False
+    scan_args.require_band_widen_window = False
+    scan_args.min_course_pattern_score = 0.0
+    scan_args.min_target_band_pct = min(float(getattr(scan_args, "min_target_band_pct", 0.01)), 0.003)
+    scan_args.min_band_vs_prev_month = min(float(getattr(scan_args, "min_band_vs_prev_month", 2.0)), 1.0)
+    scan_args.max_band_double_age = max(int(getattr(scan_args, "max_band_double_age", 14)), 30)
+    scan_args.min_band_width_now = 0.0
+    scan_args.min_band_width_percentile = 0.0
+    scan_args.min_band_slope3 = -1.0
+    scan_args.min_band_expansion = -1.0
+    scan_args.band_touch_lookback = max(int(getattr(scan_args, "band_touch_lookback", 14)), 30)
+    scan_args.recent_daily_bars = max(int(getattr(scan_args, "recent_daily_bars", 15)), 30)
+    scan_args.recent_233_bars = max(int(getattr(scan_args, "recent_233_bars", 15)), 30)
+    scan_args.cross_lookback = max(int(getattr(scan_args, "cross_lookback", 10)), 10)
     reference_symbol = PATTERN_REF_SYMBOL_DEFAULT
     reference_pattern = None
     reference_error = ""
@@ -1122,149 +1084,70 @@ def scan_stream() -> Response:
             ) + "\n"
         elif reference_error:
             yield json.dumps({"type": "status", "message": f"Reference pattern skipped: {reference_error}"}) + "\n"
-        yield json.dumps({"type": "metrics", "scanned": 0, "matches": 0, "total": total_symbols, "tier": "ranked"}) + "\n"
-        yield json.dumps({"type": "status", "message": "Scanning ranked universe...", "tier": "ranked"}) + "\n"
+        yield json.dumps({"type": "metrics", "scanned": 0, "matches": 0, "total": total_symbols, "tier": "live"}) + "\n"
+        yield json.dumps({"type": "status", "message": "Scanning universe (as found)...", "tier": "live"}) + "\n"
 
         scanned_symbols: set[str] = set()
-        remaining_symbols = list(symbols)
         hard_failures: list[tuple[str, str]] = []
-        final_tier_label = "strict"
+        pending_symbols = list(symbols)
+        attempt = 0
+        while pending_symbols:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                future_map = {pool.submit(_analyze_for_args, sym, scan_args): sym for sym in pending_symbols}
+                retry_symbols: list[str] = []
 
-        for idx, tier_score in enumerate(course_score_tiers):
-            if not remaining_symbols:
-                break
-
-            tier_label = f"tier{idx + 1}"
-            final_tier_label = tier_label
-            tier_args = copy.deepcopy(base_args)
-            tier_args.min_course_pattern_score = float(tier_score)
-            tier_i = min(idx, len(bb_multiple_tiers) - 1)
-            tier_args.min_band_vs_prev_month = bb_multiple_tiers[tier_i]
-            tier_args.max_band_double_age = bb_age_tiers[tier_i]
-            tier_args.min_band_width_now = bb_width_now_tiers[tier_i]
-            tier_args.min_band_width_percentile = bb_pct_tiers[tier_i]
-            tier_args.band_touch_lookback = band_touch_lookback_tiers[tier_i]
-            tier_args.require_band_widen_window = require_widen_window_tiers[tier_i]
-            tier_args.require_band_ride = require_band_ride_tiers[tier_i]
-            tier_args.min_band_ride_score = band_ride_tiers[tier_i]
-            tier_args.require_widening_oscillation = require_oscillation_tiers[tier_i]
-            tier_args.min_band_oscillation_score = bb_osc_tiers[tier_i]
-            tier_args.recent_daily_bars = 15 if tier_i < 2 else 21
-            tier_args.recent_233_bars = 15 if tier_i < 2 else 21
-            if tier_i == 2:
-                # True fallback tier: broaden to avoid all-zero scans.
-                tier_args.pows = False
-                tier_args.min_course_pattern_score = 0.0
-                tier_args.min_target_band_pct = min(tier_args.min_target_band_pct, 0.003)
-                tier_args.min_band_vs_prev_month = min(tier_args.min_band_vs_prev_month, 1.0)
-                tier_args.max_band_double_age = max(tier_args.max_band_double_age, 30)
-                tier_args.min_band_width_now = min(tier_args.min_band_width_now, 0.0)
-                tier_args.min_band_width_percentile = min(tier_args.min_band_width_percentile, 0.0)
-                tier_args.min_band_slope3 = min(tier_args.min_band_slope3, -1.0)
-                tier_args.min_band_expansion = min(tier_args.min_band_expansion, -1.0)
-                tier_args.band_touch_lookback = max(tier_args.band_touch_lookback, 30)
-                tier_args.require_band_widen_window = False
-                tier_args.require_widening_oscillation = False
-                tier_args.require_band_ride = False
-                tier_args.allow_momentum_watchlist = True
-                tier_args.recent_daily_bars = 40
-                tier_args.recent_233_bars = 40
-            if idx > 0:
-                yield json.dumps(
-                    {
-                        "type": "status",
-                        "message": (
-                            f"Relaxing gates: course>={tier_score:.1f}, "
-                            f"BBxMonth>={tier_args.min_band_vs_prev_month:.2f}, "
-                            f"BB2xAge<={tier_args.max_band_double_age}d, "
-                            f"BBNow>={tier_args.min_band_width_now:.3f}, "
-                            f"touch<={tier_args.band_touch_lookback}d, "
-                            f"BandRide>={'off' if not tier_args.require_band_ride else f'{tier_args.min_band_ride_score:.2f}'}, "
-                            f"BBOsc>={'off' if not tier_args.require_widening_oscillation else f'{tier_args.min_band_oscillation_score:.2f}'}"
-                        ),
-                        "tier": tier_label,
-                    }
-                ) + "\n"
-            else:
-                yield json.dumps(
-                    {
-                        "type": "status",
-                        "message": (
-                            f"Strict gates: course>={tier_score:.1f}, "
-                            f"BBxMonth>={tier_args.min_band_vs_prev_month:.2f}, "
-                            f"BB2xAge<={tier_args.max_band_double_age}d, "
-                            f"BandRide>={tier_args.min_band_ride_score:.2f}, "
-                            f"BBOsc>={tier_args.min_band_oscillation_score:.2f}"
-                        ),
-                        "tier": tier_label,
-                    }
-                ) + "\n"
-
-            pending_symbols = list(remaining_symbols)
-            remaining_symbols = []
-            attempt = 0
-
-            while pending_symbols:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                    future_map = {pool.submit(_analyze_for_args, sym, tier_args): sym for sym in pending_symbols}
-                    retry_symbols: list[str] = []
-
-                    for fut in concurrent.futures.as_completed(future_map):
-                        sym = future_map[fut]
-                        scanned_symbols.add(sym)
-                        scanned = len(scanned_symbols)
-                        yield json.dumps(
-                            {"type": "progress", "message": f"{tier_label}: {scanned}/{len(symbols)} analyzed ({sym})"}
-                        ) + "\n"
-                        yield json.dumps(
-                            {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": tier_label}
-                        ) + "\n"
-
-                        try:
-                            analyzed = fut.result()
-                        except Exception as exc:
-                            if attempt < max_retries:
-                                retry_symbols.append(sym)
-                            else:
-                                hard_failures.append((sym, str(exc)))
-                            continue
-
-                        if not analyzed:
-                            remaining_symbols.append(sym)
-                            continue
-
-                        if reference_pattern:
-                            direct_similarity = _pattern_similarity(reference_pattern, analyzed)
-                            setattr(analyzed, "pattern_similarity_direct", direct_similarity)
-                            setattr(analyzed, "pattern_similarity", direct_similarity)
-                            setattr(analyzed, "pattern_mode", str(getattr(analyzed, "setup_direction", "n/a")).upper())
-
-                        found += 1
-                        row = _result_row(analyzed)
-                        yield json.dumps({"type": "match", "tier": tier_label, "row": row}) + "\n"
-                        yield json.dumps(
-                            {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": tier_label}
-                        ) + "\n"
-
-                if retry_symbols:
-                    attempt += 1
+                for fut in concurrent.futures.as_completed(future_map):
+                    sym = future_map[fut]
+                    scanned_symbols.add(sym)
+                    scanned = len(scanned_symbols)
                     yield json.dumps(
-                        {"type": "status", "message": f"{tier_label}: retrying {len(retry_symbols)} symbol(s), attempt {attempt}/{max_retries}"}
+                        {"type": "progress", "message": f"live: {scanned}/{len(symbols)} analyzed ({sym})"}
                     ) + "\n"
-                pending_symbols = retry_symbols
+                    yield json.dumps(
+                        {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "live"}
+                    ) + "\n"
 
-            if found >= min_target_matches:
-                break
+                    try:
+                        analyzed = fut.result()
+                    except Exception as exc:
+                        if attempt < max_retries:
+                            retry_symbols.append(sym)
+                        else:
+                            hard_failures.append((sym, str(exc)))
+                        continue
+
+                    if not analyzed:
+                        continue
+
+                    if reference_pattern:
+                        direct_similarity = _pattern_similarity(reference_pattern, analyzed)
+                        setattr(analyzed, "pattern_similarity_direct", direct_similarity)
+                        setattr(analyzed, "pattern_similarity", direct_similarity)
+                        setattr(analyzed, "pattern_mode", str(getattr(analyzed, "setup_direction", "n/a")).upper())
+
+                    found += 1
+                    row = _result_row(analyzed)
+                    yield json.dumps({"type": "match", "tier": "live", "row": row}) + "\n"
+                    yield json.dumps(
+                        {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "live"}
+                    ) + "\n"
+
+            if retry_symbols:
+                attempt += 1
+                yield json.dumps(
+                    {"type": "status", "message": f"live: retrying {len(retry_symbols)} symbol(s), attempt {attempt}/{max_retries}"}
+                ) + "\n"
+            pending_symbols = retry_symbols
 
         if hard_failures and base_args.no_skips:
             first = hard_failures[0]
             yield json.dumps(
                 {"type": "error", "message": f"No-skips mode failed. Could not fetch {len(hard_failures)} symbol(s). First: {first[0]} ({first[1]})"}
             ) + "\n"
-            yield json.dumps({"type": "done", "count": found, "tier": final_tier_label}) + "\n"
+            yield json.dumps({"type": "done", "count": found, "tier": "live"}) + "\n"
             return
 
-        yield json.dumps({"type": "done", "count": found, "tier": final_tier_label}) + "\n"
+        yield json.dumps({"type": "done", "count": found, "tier": "live"}) + "\n"
 
     return Response(_generate(), mimetype="application/x-ndjson")
 
