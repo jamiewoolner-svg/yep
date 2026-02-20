@@ -398,6 +398,9 @@ def build_chart_payload(symbol: str, days: int) -> dict[str, Any]:
         raise RuntimeError(f"Not enough data to chart {symbol}")
 
     dates = [c.date.strftime("%Y-%m-%d") for c in candles]
+    opens = [c.open for c in candles]
+    highs = [c.high for c in candles]
+    lows = [c.low for c in candles]
     closes = [c.close for c in candles]
 
     sma50 = sma_series(closes, 50)
@@ -418,7 +421,11 @@ def build_chart_payload(symbol: str, days: int) -> dict[str, Any]:
 
     return {
         "symbol": symbol.upper(),
+        "timeframe": "1D",
         "dates": dates,
+        "open": opens,
+        "high": highs,
+        "low": lows,
         "close": closes,
         "sma50": _to_json_series(sma50),
         "sma89": _to_json_series(sma89),

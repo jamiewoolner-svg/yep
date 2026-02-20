@@ -103,6 +103,23 @@
     }
     .metrics { display: flex; gap: 10px; font-size: 12px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
     .metrics span { background: #152432; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
+    .chart-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .chart-controls select {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: #14222f;
+      color: var(--ink);
+      font: inherit;
+    }
     .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 980px; background: #132230; }
     th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: right; white-space: nowrap; }
@@ -172,6 +189,15 @@
 
     <div class="card">
       <h2>Charts</h2>
+      <div class="chart-controls">
+        <span>Chart Scale</span>
+        <select id="chart-scale">
+          <option value="3M">3M</option>
+          <option value="6M" selected>6M</option>
+          <option value="1Y">1Y</option>
+          <option value="ALL">All</option>
+        </select>
+      </div>
       <div id="charts"></div>
     </div>
   </div>
@@ -186,9 +212,12 @@
     const tierEl = document.getElementById('m-tier');
     const scannedEl = document.getElementById('m-scanned');
     const matchesEl = document.getElementById('m-matches');
+    const chartScaleEl = document.getElementById('chart-scale');
     let activeController = null;
+    const chartModels = [];
 
     function pick(idx, series) { return idx.map(i => series[i]); }
+    function pickOffset(idx, series, offset) { return idx.map(i => i - offset).filter(i => i >= 0 && i < series.length).map(i => series[i]); }
 
     function addRow(row) {
       const tr = document.createElement('tr');
@@ -232,34 +261,94 @@
       }
     }
 
-    function addChart(chart, tier) {
+    function _windowStart(dates, scale) {
+      if (scale === 'ALL' || !dates.length) return 0;
+      const latest = new Date(dates[dates.length - 1] + 'T00:00:00Z');
+      const days = scale === '1Y' ? 365 : (scale === '6M' ? 183 : 92);
+      const cutoff = new Date(latest.getTime() - (days * 24 * 60 * 60 * 1000));
+      let start = 0;
+      for (let i = 0; i < dates.length; i += 1) {
+        const dt = new Date(dates[i] + 'T00:00:00Z');
+        if (dt >= cutoff) {
+          start = i;
+          break;
+        }
+      }
+      return start;
+    }
+
+    function _sliceChart(chart, scale) {
+      const start = _windowStart(chart.dates, scale);
+      return {
+        ...chart,
+        _start: start,
+        dates: chart.dates.slice(start),
+        open: chart.open.slice(start),
+        high: chart.high.slice(start),
+        low: chart.low.slice(start),
+        close: chart.close.slice(start),
+        sma50: chart.sma50.slice(start),
+        sma89: chart.sma89.slice(start),
+        sma200: chart.sma200.slice(start),
+        bb_upper: chart.bb_upper.slice(start),
+        bb_lower: chart.bb_lower.slice(start),
+        macd: chart.macd.slice(start),
+        macd_signal: chart.macd_signal.slice(start),
+        stoch_k: chart.stoch_k.slice(start),
+        stoch_d: chart.stoch_d.slice(start)
+      };
+    }
+
+    function renderCharts() {
+      charts.innerHTML = '';
+      const scale = chartScaleEl.value;
+      for (const model of chartModels) {
+        addChart(model.chart, model.tier, scale);
+      }
+    }
+
+    function addChart(chart, tier, scale) {
       if (typeof Plotly === 'undefined') {
         status.textContent = 'Charts unavailable: Plotly CDN did not load.';
         return;
       }
+      const view = _sliceChart(chart, scale);
       const id = `chart-${chart.symbol}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
       const block = document.createElement('div');
-      block.innerHTML = `<h3>${chart.symbol} (${tier})</h3><div id="${id}" class="chart-box"></div>`;
+      block.innerHTML = `<h3>${chart.symbol} (${tier}) · TF: ${chart.timeframe} · Scale: ${scale}</h3><div id="${id}" class="chart-box"></div>`;
       charts.appendChild(block);
 
-      const x = chart.dates;
+      const x = view.dates;
+      const start = view._start;
       const traces = [
-        {x, y: chart.close, name: 'Close', line: {color: '#1f77b4'}, xaxis: 'x', yaxis: 'y'},
-        {x, y: chart.sma50, name: 'SMA50', line: {color: '#ff7f0e'}, xaxis: 'x', yaxis: 'y'},
-        {x, y: chart.sma89, name: 'SMA89', line: {color: '#2ca02c'}, xaxis: 'x', yaxis: 'y'},
-        {x, y: chart.sma200, name: 'SMA200', line: {color: '#9467bd'}, xaxis: 'x', yaxis: 'y'},
-        {x, y: chart.bb_upper, name: 'BB Upper', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
-        {x, y: chart.bb_lower, name: 'BB Lower', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
-        {x: pick(chart.sma_cross_up_idx, x), y: pick(chart.sma_cross_up_idx, chart.close), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 8}, name: 'SMA Up', xaxis: 'x', yaxis: 'y'},
-        {x: pick(chart.sma_cross_down_idx, x), y: pick(chart.sma_cross_down_idx, chart.close), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 8}, name: 'SMA Down', xaxis: 'x', yaxis: 'y'},
-        {x, y: chart.macd, name: 'MACD', line: {color: '#17becf'}, xaxis: 'x2', yaxis: 'y2'},
-        {x, y: chart.macd_signal, name: 'Signal', line: {color: '#bcbd22'}, xaxis: 'x2', yaxis: 'y2'},
-        {x: pick(chart.macd_cross_up_idx, x), y: pick(chart.macd_cross_up_idx, chart.macd), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'MACD Up', xaxis: 'x2', yaxis: 'y2'},
-        {x: pick(chart.macd_cross_down_idx, x), y: pick(chart.macd_cross_down_idx, chart.macd), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'MACD Down', xaxis: 'x2', yaxis: 'y2'},
-        {x, y: chart.stoch_k, name: 'Stoch %K', line: {color: '#e377c2'}, xaxis: 'x3', yaxis: 'y3'},
-        {x, y: chart.stoch_d, name: 'Stoch %D', line: {color: '#8c564b'}, xaxis: 'x3', yaxis: 'y3'},
-        {x: pick(chart.stoch_cross_up_idx, x), y: pick(chart.stoch_cross_up_idx, chart.stoch_k), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'Stoch Up', xaxis: 'x3', yaxis: 'y3'},
-        {x: pick(chart.stoch_cross_down_idx, x), y: pick(chart.stoch_cross_down_idx, chart.stoch_k), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'Stoch Down', xaxis: 'x3', yaxis: 'y3'}
+        {
+          type: 'candlestick',
+          x,
+          open: view.open,
+          high: view.high,
+          low: view.low,
+          close: view.close,
+          name: 'Candles',
+          xaxis: 'x',
+          yaxis: 'y',
+          increasing: {line: {color: '#3fb27f'}},
+          decreasing: {line: {color: '#d86b6b'}}
+        },
+        {x, y: view.sma50, name: 'SMA50', line: {color: '#ff7f0e'}, xaxis: 'x', yaxis: 'y'},
+        {x, y: view.sma89, name: 'SMA89', line: {color: '#2ca02c'}, xaxis: 'x', yaxis: 'y'},
+        {x, y: view.sma200, name: 'SMA200', line: {color: '#9467bd'}, xaxis: 'x', yaxis: 'y'},
+        {x, y: view.bb_upper, name: 'BB Upper', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
+        {x, y: view.bb_lower, name: 'BB Lower', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
+        {x: pickOffset(chart.sma_cross_up_idx, x, start), y: pickOffset(chart.sma_cross_up_idx, view.close, start), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 8}, name: 'SMA Up', xaxis: 'x', yaxis: 'y'},
+        {x: pickOffset(chart.sma_cross_down_idx, x, start), y: pickOffset(chart.sma_cross_down_idx, view.close, start), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 8}, name: 'SMA Down', xaxis: 'x', yaxis: 'y'},
+        {x, y: view.macd, name: 'MACD', line: {color: '#17becf'}, xaxis: 'x2', yaxis: 'y2'},
+        {x, y: view.macd_signal, name: 'Signal', line: {color: '#bcbd22'}, xaxis: 'x2', yaxis: 'y2'},
+        {x: pickOffset(chart.macd_cross_up_idx, x, start), y: pickOffset(chart.macd_cross_up_idx, view.macd, start), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'MACD Up', xaxis: 'x2', yaxis: 'y2'},
+        {x: pickOffset(chart.macd_cross_down_idx, x, start), y: pickOffset(chart.macd_cross_down_idx, view.macd, start), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'MACD Down', xaxis: 'x2', yaxis: 'y2'},
+        {x, y: view.stoch_k, name: 'Stoch %K', line: {color: '#e377c2'}, xaxis: 'x3', yaxis: 'y3'},
+        {x, y: view.stoch_d, name: 'Stoch %D', line: {color: '#8c564b'}, xaxis: 'x3', yaxis: 'y3'},
+        {x: pickOffset(chart.stoch_cross_up_idx, x, start), y: pickOffset(chart.stoch_cross_up_idx, view.stoch_k, start), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'Stoch Up', xaxis: 'x3', yaxis: 'y3'},
+        {x: pickOffset(chart.stoch_cross_down_idx, x, start), y: pickOffset(chart.stoch_cross_down_idx, view.stoch_k, start), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'Stoch Down', xaxis: 'x3', yaxis: 'y3'}
       ];
 
       Plotly.newPlot(id, traces, {
@@ -269,11 +358,11 @@
         font: {color: '#d8e9f6'},
         legend: {orientation: 'h'},
         grid: {rows: 3, columns: 1, pattern: 'independent', roworder: 'top to bottom'},
-        xaxis: {domain: [0, 1], anchor: 'y', showgrid: true, gridcolor: '#2a3d4e'},
+        xaxis: {domain: [0, 1], anchor: 'y', showgrid: true, gridcolor: '#2a3d4e', rangeslider: {visible: false}},
         yaxis: {domain: [0.52, 1], title: 'Price', showgrid: true, gridcolor: '#2a3d4e'},
-        xaxis2: {domain: [0, 1], anchor: 'y2', showgrid: true, gridcolor: '#2a3d4e'},
+        xaxis2: {domain: [0, 1], anchor: 'y2', showgrid: true, gridcolor: '#2a3d4e', matches: 'x'},
         yaxis2: {domain: [0.26, 0.48], title: 'MACD', showgrid: true, gridcolor: '#2a3d4e', zeroline: true, zerolinecolor: '#4f6f85'},
-        xaxis3: {domain: [0, 1], anchor: 'y3', showgrid: true, gridcolor: '#2a3d4e'},
+        xaxis3: {domain: [0, 1], anchor: 'y3', showgrid: true, gridcolor: '#2a3d4e', matches: 'x'},
         yaxis3: {domain: [0, 0.22], title: 'StochRSI', range: [0, 100], showgrid: true, gridcolor: '#2a3d4e', tickvals: [20, 50, 80]}
       }, {responsive: true});
     }
@@ -284,7 +373,8 @@
       } else if (msg.type === 'match') {
         emptyNote.style.display = 'none';
         addRow(msg.row);
-        addChart(msg.chart, msg.tier);
+        chartModels.push({chart: msg.chart, tier: msg.tier});
+        renderCharts();
         status.textContent = `Match: ${msg.row.symbol} (${msg.tier})`;
       } else if (msg.type === 'error') {
         status.textContent = `Error: ${msg.message}`;
@@ -301,6 +391,7 @@
       e.preventDefault();
       resultsBody.innerHTML = '';
       charts.innerHTML = '';
+      chartModels.length = 0;
       emptyNote.style.display = 'block';
       status.textContent = 'Starting scan...';
       tierEl.textContent = 'Tier: init';
@@ -357,6 +448,12 @@
       } finally {
         scanBtn.disabled = false;
         activeController = null;
+      }
+    });
+
+    chartScaleEl.addEventListener('change', () => {
+      if (chartModels.length) {
+        renderCharts();
       }
     });
 
