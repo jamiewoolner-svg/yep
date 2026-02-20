@@ -56,6 +56,8 @@ YAHOO_QUOTE_SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSum
 EVENT_LOOKAHEAD_DAYS = int(os.getenv("EVENT_LOOKAHEAD_DAYS", "120"))
 EVENT_CACHE_TTL_SEC = int(os.getenv("EVENT_CACHE_TTL_SEC", "1800"))
 EVENT_BLOCK_DAYS = int(os.getenv("EVENT_BLOCK_DAYS", "7"))
+PATTERN_REF_SYMBOL_DEFAULT = str(os.getenv("PATTERN_REF_SYMBOL", "GOOGL")).strip().upper() or "GOOGL"
+PATTERN_REF_WEIGHT = float(os.getenv("PATTERN_REF_WEIGHT", "1000"))
 _EVENT_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _EVENT_CACHE_LOCK = threading.Lock()
 CHART_CACHE_TTL_SEC = int(os.getenv("CHART_CACHE_TTL_SEC", "300"))
@@ -455,7 +457,7 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         + (raw_pre3x * 2.0)
         + (raw_hist_wr * 100.0)
         + (max(0.0, raw_bb_expansion) * 300.0)
-        + (raw_pattern_similarity * 600.0)
+        + (raw_pattern_similarity * PATTERN_REF_WEIGHT)
     )
     return {
         "symbol": analyzed.symbol,
@@ -940,7 +942,7 @@ def scan_stream() -> Response:
     base_args = _ranked_scan_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = max(0, int(base_args.max_retries))
-    reference_symbol = str(os.getenv("PATTERN_REF_SYMBOL", "IBM")).strip().upper() or "IBM"
+    reference_symbol = PATTERN_REF_SYMBOL_DEFAULT
     reference_pattern = None
     reference_error = ""
     try:
