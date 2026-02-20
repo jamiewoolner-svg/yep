@@ -316,6 +316,8 @@
             <span class="pill">BBNow ${num(model.row.bb_width_now, 0).toFixed(3)}</span>
             <span class="pill">BBPct ${num(model.row.bb_width_pct, 0).toFixed(1)}%</span>
             <span class="pill">BBSlope3 ${num(model.row.bb_slope3, 0).toFixed(4)}</span>
+            <span class="pill">BBxMonth ${num(model.row.bb_vs_prev_month, 0).toFixed(2)}x</span>
+            <span class="pill">BB2xAge ${num(model.row.bb_double_age, 999)}d</span>
             <span class="pill">${bbWindowOk ? 'BBW 5-14d OK' : `BBW start ${bbStartAge}d`}</span>
           </div>
         </div>

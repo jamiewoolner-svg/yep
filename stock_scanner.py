@@ -125,6 +125,10 @@ class ScanResult:
     band_width_now: float
     band_width_percentile: float
     band_width_slope3: float
+    band_width_prev_month_avg: float
+    band_width_vs_prev_month: float
+    band_width_double_age: int
+    band_width_double_recent_ok: bool
     band_widen_start_age: int
     band_widen_window_ok: bool
     liftoff_from_band: bool
@@ -284,6 +288,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Minimum 3-bar BB width slope (bw_now - bw_3bars_ago) to ensure widening is active.",
+    )
+    parser.add_argument(
+        "--min-band-vs-prev-month",
+        type=float,
+        default=2.0,
+        help="Minimum multiple of current BB width versus average BB width of the prior month.",
+    )
+    parser.add_argument(
+        "--max-band-double-age",
+        type=int,
+        default=14,
+        help="Current-width 2x trigger must first occur within this many recent candles.",
     )
     parser.add_argument(
         "--min-target-band-pct",
@@ -1435,6 +1451,35 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     band_width_slope3 = 0.0
     if not math.isnan(bw_now) and not math.isnan(bw_3ago):
         band_width_slope3 = float(bw_now - bw_3ago)
+    # "Month before" baseline: prior 20 trading bars, excluding the most recent 14 bars.
+    prior_month_start = max(0, last_idx - 34)
+    prior_month_end = max(0, last_idx - 14)
+    bw_prior_month: list[float] = []
+    for i in range(prior_month_start, prior_month_end + 1):
+        v = bw_by_idx.get(i)
+        if v is None or math.isnan(v):
+            continue
+        bw_prior_month.append(float(v))
+    band_width_prev_month_avg = statistics.fmean(bw_prior_month) if bw_prior_month else math.nan
+    band_width_vs_prev_month = 0.0
+    if not math.isnan(bw_now) and not math.isnan(band_width_prev_month_avg) and band_width_prev_month_avg > 0:
+        band_width_vs_prev_month = float(bw_now / band_width_prev_month_avg)
+    band_width_double_age = 999
+    band_width_double_recent_ok = False
+    if not math.isnan(band_width_prev_month_avg) and band_width_prev_month_avg > 0:
+        threshold = 2.0 * band_width_prev_month_avg
+        first_idx = -1
+        search_start = max(0, last_idx - 20)
+        for i in range(search_start, last_idx + 1):
+            v = bw_by_idx.get(i)
+            if v is None or math.isnan(v):
+                continue
+            if v >= threshold:
+                first_idx = i
+                break
+        if first_idx >= 0:
+            band_width_double_age = last_idx - first_idx
+            band_width_double_recent_ok = band_width_double_age <= 14
     # Course timing rule: BB widening should begin roughly 5-14 bars before setup maturity.
     band_widen_start_age = 999
     band_widen_window_ok = False
@@ -1692,6 +1737,10 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         band_width_now=bw_now_safe,
         band_width_percentile=band_width_percentile,
         band_width_slope3=band_width_slope3,
+        band_width_prev_month_avg=(0.0 if math.isnan(band_width_prev_month_avg) else float(band_width_prev_month_avg)),
+        band_width_vs_prev_month=band_width_vs_prev_month,
+        band_width_double_age=band_width_double_age,
+        band_width_double_recent_ok=band_width_double_recent_ok,
         band_widen_start_age=band_widen_start_age,
         band_widen_window_ok=band_widen_window_ok,
         liftoff_from_band=liftoff_from_band,
@@ -1873,6 +1922,8 @@ def _passes_directional_setup(
         min_band_width_now = max(0.0, float(getattr(args, "min_band_width_now", 0.08)))
         min_band_width_percentile = max(0.0, min(1.0, float(getattr(args, "min_band_width_percentile", 0.55))))
         min_band_slope3 = float(getattr(args, "min_band_slope3", 0.0))
+        min_band_vs_prev_month = max(1.0, float(getattr(args, "min_band_vs_prev_month", 2.0)))
+        max_band_double_age = max(1, int(getattr(args, "max_band_double_age", 14)))
         bull_ok = bull_ok and (result.target_band_pct >= min_target_band_pct)
         bear_ok = bear_ok and (result.target_band_pct >= min_target_band_pct)
         bull_ok = bull_ok and (result.band_width_now >= min_band_width_now)
@@ -1881,6 +1932,11 @@ def _passes_directional_setup(
         bear_ok = bear_ok and (result.band_width_percentile >= min_band_width_percentile)
         bull_ok = bull_ok and (result.band_width_slope3 >= min_band_slope3)
         bear_ok = bear_ok and (result.band_width_slope3 >= min_band_slope3)
+        # Hard user rule: width must be >= 2x prior-month average, and that 2x trigger must be recent.
+        bull_ok = bull_ok and (result.band_width_vs_prev_month >= min_band_vs_prev_month)
+        bear_ok = bear_ok and (result.band_width_vs_prev_month >= min_band_vs_prev_month)
+        bull_ok = bull_ok and (result.band_width_double_age <= max_band_double_age)
+        bear_ok = bear_ok and (result.band_width_double_age <= max_band_double_age)
         # Enforce user rule: widening should start about 5-14 bars before "ready" setups.
         if result.timeframe == "1D":
             bull_ok = bull_ok and bool(getattr(result, "band_widen_window_ok", False))
