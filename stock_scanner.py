@@ -1048,8 +1048,8 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
         bull_ok = bull_ok and (result.close > result.sma50 and result.sma50 >= result.sma89)
         bear_ok = bear_ok and (result.close < result.sma50 and result.sma50 <= result.sma89)
         # Course 3x language: align price (2/3 MA), Stoch, and MACD in recent bars.
-        bull_ok = bull_ok and (result.price_cross_age <= args.cross_lookback and result.triple_cross_gap <= 2)
-        bear_ok = bear_ok and (result.price_bear_cross_age <= args.cross_lookback and result.triple_bear_cross_gap <= 2)
+        bull_ok = bull_ok and (result.price_cross_age <= args.cross_lookback and result.triple_cross_gap <= 4)
+        bear_ok = bear_ok and (result.price_bear_cross_age <= args.cross_lookback and result.triple_bear_cross_gap <= 4)
 
     if require_macd_bull:
         bull_ok = bull_ok and (result.macd > result.macd_signal)

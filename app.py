@@ -129,6 +129,7 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     medium = copy.deepcopy(strict)
     medium.require_simultaneous_cross = False
     medium.require_daily_and_233 = False
+    medium.require_band_liftoff = False
     medium.cross_lookback = max(medium.cross_lookback, 7)
     medium.band_touch_lookback = max(medium.band_touch_lookback, 10)
     medium.min_band_expansion = min(medium.min_band_expansion, 0.01)
@@ -137,6 +138,10 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     loose = copy.deepcopy(medium)
     loose.pows = False
     loose.require_macd_stoch_cross = False
+    loose.require_band_liftoff = False
+    loose.require_uptrend = False
+    loose.require_macd_bull = False
+    loose.require_di_bull = False
     loose.cross_lookback = max(loose.cross_lookback, 10)
     loose.band_touch_lookback = max(loose.band_touch_lookback, 12)
     loose.min_band_expansion = min(loose.min_band_expansion, 0.0)
