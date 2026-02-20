@@ -1069,25 +1069,41 @@ def scan_stream() -> Response:
     base_args = _ranked_scan_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = max(0, int(base_args.max_retries))
-    scan_args = copy.deepcopy(base_args)
-    # Single-pass "as found" mode: broad enough to avoid zero-result scans.
-    scan_args.allow_momentum_watchlist = True
-    scan_args.pows = False
-    scan_args.require_band_ride = False
-    scan_args.require_widening_oscillation = False
-    scan_args.require_band_widen_window = False
-    scan_args.min_course_pattern_score = 0.0
-    scan_args.min_target_band_pct = min(float(getattr(scan_args, "min_target_band_pct", 0.01)), 0.003)
-    scan_args.min_band_vs_prev_month = min(float(getattr(scan_args, "min_band_vs_prev_month", 2.0)), 1.0)
-    scan_args.max_band_double_age = max(int(getattr(scan_args, "max_band_double_age", 14)), 30)
-    scan_args.min_band_width_now = 0.0
-    scan_args.min_band_width_percentile = 0.0
-    scan_args.min_band_slope3 = -1.0
-    scan_args.min_band_expansion = -1.0
-    scan_args.band_touch_lookback = max(int(getattr(scan_args, "band_touch_lookback", 14)), 30)
-    scan_args.recent_daily_bars = max(int(getattr(scan_args, "recent_daily_bars", 15)), 30)
-    scan_args.recent_233_bars = max(int(getattr(scan_args, "recent_233_bars", 15)), 30)
-    scan_args.cross_lookback = max(int(getattr(scan_args, "cross_lookback", 10)), 10)
+    target_hits = max(1, int(os.getenv("TARGET_HITS", "100")))
+    max_tune_steps = max(1, int(os.getenv("MAX_TUNE_STEPS", "6")))
+
+    def _tuned_args(step: int) -> SimpleNamespace:
+        a = copy.deepcopy(base_args)
+        # Step 0: strict baseline.
+        if step >= 1:
+            a.allow_momentum_watchlist = True
+            a.cross_lookback = max(int(getattr(a, "cross_lookback", 10)), 10)
+            a.recent_daily_bars = max(int(getattr(a, "recent_daily_bars", 15)), 20)
+            a.recent_233_bars = max(int(getattr(a, "recent_233_bars", 15)), 20)
+        if step >= 2:
+            a.require_band_widen_window = False
+            a.require_widening_oscillation = False
+            a.min_course_pattern_score = max(25.0, float(getattr(a, "min_course_pattern_score", 62.0)) - 20.0)
+        if step >= 3:
+            a.require_band_ride = False
+            a.min_band_vs_prev_month = min(float(getattr(a, "min_band_vs_prev_month", 2.0)), 1.4)
+            a.max_band_double_age = max(int(getattr(a, "max_band_double_age", 14)), 20)
+            a.min_band_width_now = min(float(getattr(a, "min_band_width_now", 0.08)), 0.04)
+            a.min_band_width_percentile = min(float(getattr(a, "min_band_width_percentile", 0.60)), 0.35)
+        if step >= 4:
+            a.pows = False
+            a.min_course_pattern_score = 0.0
+            a.min_target_band_pct = min(float(getattr(a, "min_target_band_pct", 0.01)), 0.003)
+            a.min_band_vs_prev_month = min(float(getattr(a, "min_band_vs_prev_month", 1.4)), 1.0)
+            a.min_band_width_now = 0.0
+            a.min_band_width_percentile = 0.0
+            a.min_band_slope3 = -1.0
+            a.min_band_expansion = -1.0
+            a.band_touch_lookback = max(int(getattr(a, "band_touch_lookback", 14)), 30)
+        if step >= 5:
+            a.recent_daily_bars = max(int(getattr(a, "recent_daily_bars", 20)), 40)
+            a.recent_233_bars = max(int(getattr(a, "recent_233_bars", 20)), 40)
+        return a
     reference_symbol = PATTERN_REF_SYMBOL_DEFAULT
     reference_pattern = None
     reference_error = ""
@@ -1103,8 +1119,9 @@ def scan_stream() -> Response:
         found = 0
         total_symbols = len(symbols)
         yield json.dumps({"type": "status", "message": f"Universe size: {total_symbols} symbols"}) + "\n"
-        src = str(getattr(scan_args, "data_source", "auto")).lower()
-        key_present = bool(str(getattr(scan_args, "polygon_api_key", "")).strip() or os.getenv("POLYGON_API_KEY", "").strip())
+        strict_args = _tuned_args(0)
+        src = str(getattr(strict_args, "data_source", "auto")).lower()
+        key_present = bool(str(getattr(strict_args, "polygon_api_key", "")).strip() or os.getenv("POLYGON_API_KEY", "").strip())
         yield json.dumps(
             {"type": "status", "message": f"Data source: {src} | Polygon key: {'present' if key_present else 'missing'}"}
         ) + "\n"
@@ -1128,59 +1145,82 @@ def scan_stream() -> Response:
         elif reference_error:
             yield json.dumps({"type": "status", "message": f"Reference pattern skipped: {reference_error}"}) + "\n"
         yield json.dumps({"type": "metrics", "scanned": 0, "matches": 0, "total": total_symbols, "tier": "live"}) + "\n"
-        yield json.dumps({"type": "status", "message": "Scanning universe (as found)...", "tier": "live"}) + "\n"
+        yield json.dumps(
+            {"type": "status", "message": f"Scanning universe with auto-tune target={target_hits}...", "tier": "live"}
+        ) + "\n"
 
         scanned_symbols: set[str] = set()
+        matched_symbols: set[str] = set()
         hard_failures: list[tuple[str, str]] = []
-        pending_symbols = list(symbols)
-        attempt = 0
-        while pending_symbols:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                future_map = {pool.submit(_analyze_for_args, sym, scan_args): sym for sym in pending_symbols}
-                retry_symbols: list[str] = []
+        remaining_symbols = list(symbols)
 
-                for fut in concurrent.futures.as_completed(future_map):
-                    sym = future_map[fut]
-                    scanned_symbols.add(sym)
-                    scanned = len(scanned_symbols)
+        for step in range(max_tune_steps):
+            if not remaining_symbols or found >= target_hits:
+                break
+            tune_args = _tuned_args(step)
+            yield json.dumps(
+                {
+                    "type": "status",
+                    "message": (
+                        f"tune step {step + 1}/{max_tune_steps}: "
+                        f"remaining={len(remaining_symbols)} hits={found}/{target_hits}"
+                    ),
+                    "tier": "live",
+                }
+            ) + "\n"
+            pending_symbols = list(remaining_symbols)
+            retry_attempt = 0
+            while pending_symbols:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                    future_map = {pool.submit(_analyze_for_args, sym, tune_args): sym for sym in pending_symbols}
+                    retry_symbols: list[str] = []
+
+                    for fut in concurrent.futures.as_completed(future_map):
+                        sym = future_map[fut]
+                        scanned_symbols.add(sym)
+                        scanned = len(scanned_symbols)
+                        yield json.dumps(
+                            {"type": "progress", "message": f"live: {scanned}/{len(symbols)} analyzed ({sym})"}
+                        ) + "\n"
+                        yield json.dumps(
+                            {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "live"}
+                        ) + "\n"
+
+                        try:
+                            analyzed = fut.result()
+                        except Exception as exc:
+                            if retry_attempt < max_retries:
+                                retry_symbols.append(sym)
+                            else:
+                                hard_failures.append((sym, str(exc)))
+                            continue
+
+                        if not analyzed:
+                            continue
+                        if sym in matched_symbols:
+                            continue
+
+                        if reference_pattern:
+                            direct_similarity = _pattern_similarity(reference_pattern, analyzed)
+                            setattr(analyzed, "pattern_similarity_direct", direct_similarity)
+                            setattr(analyzed, "pattern_similarity", direct_similarity)
+                            setattr(analyzed, "pattern_mode", str(getattr(analyzed, "setup_direction", "n/a")).upper())
+
+                        found += 1
+                        matched_symbols.add(sym)
+                        row = _result_row(analyzed)
+                        yield json.dumps({"type": "match", "tier": "live", "row": row}) + "\n"
+                        yield json.dumps(
+                            {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "live"}
+                        ) + "\n"
+
+                if retry_symbols:
+                    retry_attempt += 1
                     yield json.dumps(
-                        {"type": "progress", "message": f"live: {scanned}/{len(symbols)} analyzed ({sym})"}
+                        {"type": "status", "message": f"live: retrying {len(retry_symbols)} symbol(s), attempt {retry_attempt}/{max_retries}"}
                     ) + "\n"
-                    yield json.dumps(
-                        {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "live"}
-                    ) + "\n"
-
-                    try:
-                        analyzed = fut.result()
-                    except Exception as exc:
-                        if attempt < max_retries:
-                            retry_symbols.append(sym)
-                        else:
-                            hard_failures.append((sym, str(exc)))
-                        continue
-
-                    if not analyzed:
-                        continue
-
-                    if reference_pattern:
-                        direct_similarity = _pattern_similarity(reference_pattern, analyzed)
-                        setattr(analyzed, "pattern_similarity_direct", direct_similarity)
-                        setattr(analyzed, "pattern_similarity", direct_similarity)
-                        setattr(analyzed, "pattern_mode", str(getattr(analyzed, "setup_direction", "n/a")).upper())
-
-                    found += 1
-                    row = _result_row(analyzed)
-                    yield json.dumps({"type": "match", "tier": "live", "row": row}) + "\n"
-                    yield json.dumps(
-                        {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "live"}
-                    ) + "\n"
-
-            if retry_symbols:
-                attempt += 1
-                yield json.dumps(
-                    {"type": "status", "message": f"live: retrying {len(retry_symbols)} symbol(s), attempt {attempt}/{max_retries}"}
-                ) + "\n"
-            pending_symbols = retry_symbols
+                pending_symbols = retry_symbols
+            remaining_symbols = [s for s in remaining_symbols if s not in matched_symbols]
 
         if hard_failures and base_args.no_skips:
             first = hard_failures[0]
