@@ -314,6 +314,8 @@
             <span class="pill">Score ${num(model.row.setup_score, 0).toFixed(1)}</span>
             <span class="pill">BBExp ${num(model.row.bb_expansion, 0).toFixed(3)}</span>
             <span class="pill">BBNow ${num(model.row.bb_width_now, 0).toFixed(3)}</span>
+            <span class="pill">BBPct ${num(model.row.bb_width_pct, 0).toFixed(1)}%</span>
+            <span class="pill">BBSlope3 ${num(model.row.bb_slope3, 0).toFixed(4)}</span>
             <span class="pill">${bbWindowOk ? 'BBW 5-14d OK' : `BBW start ${bbStartAge}d`}</span>
           </div>
         </div>

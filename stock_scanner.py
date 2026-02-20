@@ -123,6 +123,8 @@ class ScanResult:
     outer_touch_age: int
     band_width_expansion: float
     band_width_now: float
+    band_width_percentile: float
+    band_width_slope3: float
     band_widen_start_age: int
     band_widen_window_ok: bool
     liftoff_from_band: bool
@@ -270,6 +272,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.08,
         help="Minimum current normalized BB width (upper-lower)/middle.",
+    )
+    parser.add_argument(
+        "--min-band-width-percentile",
+        type=float,
+        default=0.55,
+        help="Minimum percentile rank of current BB width vs recent BB widths (0-1).",
+    )
+    parser.add_argument(
+        "--min-band-slope3",
+        type=float,
+        default=0.0,
+        help="Minimum 3-bar BB width slope (bw_now - bw_3bars_ago) to ensure widening is active.",
     )
     parser.add_argument(
         "--min-target-band-pct",
@@ -1398,18 +1412,29 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     band_width_expansion = 0.0
     if not math.isnan(bw_now) and not math.isnan(prior_bw) and prior_bw > 0:
         band_width_expansion = (bw_now - prior_bw) / prior_bw
-    bw_recent = [
-        (bb_upper_series[i] - bb_lower_series[i]) / bb_mid_series[i]
-        for i in range(max(0, len(closes) - 50), len(closes))
-        if (
-            i < len(bb_mid_series)
-            and not math.isnan(bb_upper_series[i])
-            and not math.isnan(bb_lower_series[i])
-            and not math.isnan(bb_mid_series[i])
-            and bb_mid_series[i] != 0
-        )
-    ]
+    bw_recent: list[float] = []
+    bw_by_idx: dict[int, float] = {}
+    for i in range(max(0, len(closes) - 60), len(closes)):
+        if i >= len(bb_mid_series):
+            continue
+        mid_i = bb_mid_series[i]
+        up_i = bb_upper_series[i]
+        low_i = bb_lower_series[i]
+        if math.isnan(mid_i) or math.isnan(up_i) or math.isnan(low_i) or mid_i == 0:
+            continue
+        bw_i = (up_i - low_i) / mid_i
+        bw_recent.append(bw_i)
+        bw_by_idx[i] = bw_i
     bw_median = statistics.median(bw_recent) if bw_recent else math.nan
+    bw_now_safe = 0.0 if math.isnan(bw_now) else float(bw_now)
+    band_width_percentile = 0.0
+    if bw_recent and not math.isnan(bw_now):
+        le = sum(1 for v in bw_recent if v <= bw_now)
+        band_width_percentile = le / float(len(bw_recent))
+    bw_3ago = bw_by_idx.get(max(0, last_idx - 3), math.nan)
+    band_width_slope3 = 0.0
+    if not math.isnan(bw_now) and not math.isnan(bw_3ago):
+        band_width_slope3 = float(bw_now - bw_3ago)
     # Course timing rule: BB widening should begin roughly 5-14 bars before setup maturity.
     band_widen_start_age = 999
     band_widen_window_ok = False
@@ -1566,6 +1591,8 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         band_action_quality = 1.0 if (rejection_from_band and outer_touch_age <= 3) else 0.0
         fresh_age = min(price_bear_cross_age, macd_bear_cross_age, stoch_bear_cross_age, outer_touch_age)
     spread_quality = _clamp01((band_width_expansion - 0.02) / 0.12)
+    spread_now_quality = _clamp01((band_width_percentile - 0.50) / 0.35)
+    spread_slope_quality = _clamp01((band_width_slope3 + 0.002) / 0.012)
     widen_window_quality = 1.0 if band_widen_window_ok else 0.0
     fresh_quality = _clamp01(1.0 - (fresh_age / 3.0))
     target_quality = _clamp01(target_mid_pct / 0.012)
@@ -1574,7 +1601,9 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         0.20 * trend_quality
         + 0.20 * momentum_quality
         + 0.20 * band_action_quality
-        + 0.10 * spread_quality
+        + 0.06 * spread_quality
+        + 0.04 * spread_now_quality
+        + 0.03 * spread_slope_quality
         + 0.15 * widen_window_quality
         + 0.10 * fresh_quality
         + 0.05 * target_quality
@@ -1660,7 +1689,9 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         touched_outer_band_recent=touched_outer_band_recent,
         outer_touch_age=outer_touch_age,
         band_width_expansion=band_width_expansion,
-        band_width_now=(0.0 if math.isnan(bw_now) else float(bw_now)),
+        band_width_now=bw_now_safe,
+        band_width_percentile=band_width_percentile,
+        band_width_slope3=band_width_slope3,
         band_widen_start_age=band_widen_start_age,
         band_widen_window_ok=band_widen_window_ok,
         liftoff_from_band=liftoff_from_band,
@@ -1840,10 +1871,16 @@ def _passes_directional_setup(
         # Reject late-stage entries and narrow-band states.
         min_target_band_pct = max(0.0, float(getattr(args, "min_target_band_pct", 0.01)))
         min_band_width_now = max(0.0, float(getattr(args, "min_band_width_now", 0.08)))
+        min_band_width_percentile = max(0.0, min(1.0, float(getattr(args, "min_band_width_percentile", 0.55))))
+        min_band_slope3 = float(getattr(args, "min_band_slope3", 0.0))
         bull_ok = bull_ok and (result.target_band_pct >= min_target_band_pct)
         bear_ok = bear_ok and (result.target_band_pct >= min_target_band_pct)
         bull_ok = bull_ok and (result.band_width_now >= min_band_width_now)
         bear_ok = bear_ok and (result.band_width_now >= min_band_width_now)
+        bull_ok = bull_ok and (result.band_width_percentile >= min_band_width_percentile)
+        bear_ok = bear_ok and (result.band_width_percentile >= min_band_width_percentile)
+        bull_ok = bull_ok and (result.band_width_slope3 >= min_band_slope3)
+        bear_ok = bear_ok and (result.band_width_slope3 >= min_band_slope3)
         # Enforce user rule: widening should start about 5-14 bars before "ready" setups.
         if result.timeframe == "1D":
             bull_ok = bull_ok and bool(getattr(result, "band_widen_window_ok", False))
