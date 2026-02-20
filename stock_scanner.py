@@ -243,6 +243,12 @@ def parse_args() -> argparse.Namespace:
         help="Require MACD cross within this many bars, or imminently approaching within this window.",
     )
     parser.add_argument(
+        "--max-stoch-cross-age",
+        type=int,
+        default=3,
+        help="Require StochRSI cross within this many bars, or imminently approaching within this window.",
+    )
+    parser.add_argument(
         "--band-touch-lookback",
         type=int,
         default=6,
@@ -1620,6 +1626,7 @@ def _passes_directional_setup(
     bb_spread_watchlist = getattr(args, "bb_spread_watchlist", False)
     require_simultaneous_cross = args.require_simultaneous_cross
     max_macd_cross_age = max(1, int(getattr(args, "max_macd_cross_age", 3)))
+    max_stoch_cross_age = max(1, int(getattr(args, "max_stoch_cross_age", 3)))
     want_bull, want_bear = _direction_match(result, args)
 
     bull_ok = True
@@ -1678,6 +1685,24 @@ def _passes_directional_setup(
     )
     bull_ok = bull_ok and (result.macd_cross_age <= max_macd_cross_age or bull_macd_imminent)
     bear_ok = bear_ok and (result.macd_bear_cross_age <= max_macd_cross_age or bear_macd_imminent)
+
+    stoch_gap_now = float(result.stoch_rsi_k - result.stoch_rsi_d)
+    if any(math.isnan(v) for v in (result.stoch_rsi_k, result.stoch_rsi_d)):
+        stoch_gap_now = 0.0
+    # Approximate prior delta from known cross age trend: if cross is stale, demand very tight current gap.
+    stoch_gap_thresh = 4.0
+    bull_stoch_imminent = (
+        result.stoch_rsi_k <= result.stoch_rsi_d
+        and stoch_gap_now >= -stoch_gap_thresh
+        and (result.stoch_cross_age <= max_stoch_cross_age + 2 or result.stoch_rsi_k > POWS_STOCH_OS)
+    )
+    bear_stoch_imminent = (
+        result.stoch_rsi_k >= result.stoch_rsi_d
+        and stoch_gap_now <= stoch_gap_thresh
+        and (result.stoch_bear_cross_age <= max_stoch_cross_age + 2 or result.stoch_rsi_k < POWS_STOCH_OB)
+    )
+    bull_ok = bull_ok and (result.stoch_cross_age <= max_stoch_cross_age or bull_stoch_imminent)
+    bear_ok = bear_ok and (result.stoch_bear_cross_age <= max_stoch_cross_age or bear_stoch_imminent)
 
     # Pre-liftoff discovery path for setups that can evolve into 3x confirmation.
     spread_floor = max(0.0, args.min_band_expansion)

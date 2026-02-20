@@ -370,6 +370,7 @@ def _build_args(form: Any) -> SimpleNamespace:
         signal_direction="both",
         cross_lookback=_as_int(form, "cross_lookback", 4),
         max_macd_cross_age=_as_int(form, "max_macd_cross_age", 3),
+        max_stoch_cross_age=_as_int(form, "max_stoch_cross_age", 3),
         band_touch_lookback=_as_int(form, "band_touch_lookback", 6),
         min_band_expansion=_as_float(form, "min_band_expansion", 0.05),
         min_course_pattern_score=_as_float(form, "min_course_pattern_score", 55.0),
@@ -524,6 +525,7 @@ def _strategy_args() -> SimpleNamespace:
         signal_direction="both",
         cross_lookback=6,
         max_macd_cross_age=3,
+        max_stoch_cross_age=3,
         triple_gap_max=6,
         band_touch_lookback=8,
         min_band_expansion=0.03,
@@ -637,6 +639,7 @@ def _ranked_scan_args() -> SimpleNamespace:
     args.require_secondary_confirmation = False
     args.scan_intraday_3x = True
     args.max_macd_cross_age = min(int(getattr(args, "max_macd_cross_age", 3)), 3)
+    args.max_stoch_cross_age = min(int(getattr(args, "max_stoch_cross_age", 3)), 3)
     args.cross_lookback = max(args.cross_lookback, 14)
     args.triple_gap_max = 12
     args.min_adx = min(args.min_adx, 3.0)
