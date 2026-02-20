@@ -11,6 +11,7 @@ from typing import Any
 from flask import Flask, Response, render_template, render_template_string, request, stream_with_context
 
 from stock_scanner import (
+    Candle,
     POWS_BB_LENGTH,
     POWS_BB_STDDEV,
     POWS_MACD_FAST,
@@ -154,6 +155,8 @@ def _strategy_args() -> SimpleNamespace:
         min_band_expansion=0.03,
         require_daily_and_233=True,
         require_hourly=True,
+        require_weekly_context=True,
+        require_precision_entry=True,
         intraday_interval_min=1,
         auto_fallback=True,
         no_skips=False,
@@ -174,6 +177,8 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     strict.require_simultaneous_cross = False
     strict.require_daily_and_233 = True
     strict.require_hourly = True
+    strict.require_weekly_context = True
+    strict.require_precision_entry = True
     strict.cross_lookback = min(strict.cross_lookback, 5)
     strict.band_touch_lookback = min(strict.band_touch_lookback, 8)
     strict.min_band_expansion = max(strict.min_band_expansion, 0.03)
@@ -183,6 +188,8 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     confirm.require_simultaneous_cross = False
     confirm.require_daily_and_233 = True
     confirm.require_hourly = True
+    confirm.require_weekly_context = True
+    confirm.require_precision_entry = True
     confirm.require_band_liftoff = False
     confirm.bb_spread_watchlist = True
     confirm.cross_lookback = max(confirm.cross_lookback, 7)
@@ -201,10 +208,14 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     developing.min_adx = min(developing.min_adx, 6.0)
     developing.require_daily_and_233 = True
     developing.require_hourly = True
+    developing.require_weekly_context = True
+    developing.require_precision_entry = False
 
     watchlist = copy.deepcopy(developing)
     watchlist.require_daily_and_233 = False
     watchlist.require_hourly = False
+    watchlist.require_weekly_context = False
+    watchlist.require_precision_entry = False
     watchlist.require_macd_stoch_cross = False
     watchlist.require_band_liftoff = False
     watchlist.bb_spread_watchlist = True
@@ -218,6 +229,74 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     return [("strict", strict), ("confirm", confirm), ("developing", developing), ("watchlist", watchlist)]
 
 
+def _resample_daily_to_weekly(candles: list[Candle]) -> list[Candle]:
+    if not candles:
+        return []
+    out: list[Candle] = []
+    bucket: list[Candle] = []
+    current_key: tuple[int, int] | None = None
+    for c in candles:
+        key = c.date.isocalendar()[:2]
+        if current_key is None:
+            current_key = key
+        if key != current_key and bucket:
+            out.append(
+                Candle(
+                    date=bucket[-1].date,
+                    open=bucket[0].open,
+                    high=max(x.high for x in bucket),
+                    low=min(x.low for x in bucket),
+                    close=bucket[-1].close,
+                    volume=sum(x.volume for x in bucket),
+                )
+            )
+            bucket = []
+            current_key = key
+        bucket.append(c)
+    if bucket:
+        out.append(
+            Candle(
+                date=bucket[-1].date,
+                open=bucket[0].open,
+                high=max(x.high for x in bucket),
+                low=min(x.low for x in bucket),
+                close=bucket[-1].close,
+                volume=sum(x.volume for x in bucket),
+            )
+        )
+    return out
+
+
+def _weekly_context_ok(daily: Any, weekly: Any) -> bool:
+    if not weekly:
+        return False
+    direction = str(getattr(daily, "setup_direction", "bull")).lower()
+    if direction == "bear":
+        return bool(weekly.close <= weekly.sma50 and weekly.sma50 <= weekly.sma89)
+    return bool(weekly.close >= weekly.sma50 and weekly.sma50 >= weekly.sma89)
+
+
+def _precision_entry_ok(intraday: list[Candle], daily: Any, args: SimpleNamespace) -> bool:
+    # Course precision ladder: 21 (daily), 13 (233), 8/5 (55/34 style intraday refinement).
+    direction = str(getattr(daily, "setup_direction", "bull")).lower()
+    lookback = max(6, int(getattr(args, "cross_lookback", 6)))
+    for minutes, label in ((21, "21m"), (13, "13m"), (8, "8m"), (5, "5m")):
+        candles = resample_to_minutes(intraday, target_minutes=minutes)
+        tf = analyze_candles(daily.symbol, candles, label)
+        if not tf:
+            continue
+        tf_dir = str(getattr(tf, "setup_direction", "")).lower()
+        if tf_dir and tf_dir != direction:
+            continue
+        if direction == "bear":
+            if tf.macd_bear_cross_age <= lookback and tf.stoch_bear_cross_age <= lookback:
+                return True
+        else:
+            if tf.macd_cross_age <= lookback and tf.stoch_cross_age <= lookback:
+                return True
+    return False
+
+
 def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
     retries = 2
     for attempt in range(retries + 1):
@@ -227,7 +306,15 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                 return None
             if not passes_filters(daily, args):
                 return None
-            if args.require_daily_and_233 or getattr(args, "require_hourly", False):
+
+            daily_candles = fetch_history(symbol)
+            if getattr(args, "require_weekly_context", False):
+                weekly_candles = _resample_daily_to_weekly(daily_candles)
+                weekly = analyze_candles(symbol, weekly_candles, "1W")
+                if not _weekly_context_ok(daily, weekly):
+                    return None
+
+            if args.require_daily_and_233 or getattr(args, "require_hourly", False) or getattr(args, "require_precision_entry", False):
                 intraday = fetch_intraday(symbol, interval_min=args.intraday_interval_min)
                 secondary_pass = False
 
@@ -245,6 +332,10 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
 
                 if not secondary_pass:
                     return None
+
+                if getattr(args, "require_precision_entry", False):
+                    if not _precision_entry_ok(intraday, daily, args):
+                        return None
             return daily
         except RuntimeError:
             if attempt >= retries:
