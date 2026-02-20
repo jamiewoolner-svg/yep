@@ -75,7 +75,7 @@
     }
     h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.15; letter-spacing: 0.01em; }
     h2 { margin: 0 0 12px; font-size: 20px; line-height: 1.2; }
-    h3 { margin: 12px 0 8px; font-size: 16px; line-height: 1.2; color: var(--ink); }
+    h3 { margin: 0; font-size: 18px; line-height: 1.2; }
     p { color: var(--muted); margin: 0 0 12px; }
     .actions { margin-top: 12px; display: flex; gap: 10px; }
     button {
@@ -112,6 +112,44 @@
     }
     .calendar-list li { margin: 4px 0; }
     .calendar-empty { color: var(--muted); margin: 0; }
+    .err { color: var(--danger); font-weight: 700; margin-top: 8px; }
+    #empty-note { margin-top: 10px; }
+    .signal-feed {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+    }
+    .signal-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #132230;
+      padding: 12px;
+    }
+    .signal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+    .signal-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .pill {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #1a2e40;
+      border: 1px solid #335068;
+    }
+    .pill.bull { color: #89f0b8; border-color: #2f6e4c; }
+    .pill.bear { color: #f3a3a3; border-color: #7a3b3b; }
     .chart-controls {
       display: flex;
       align-items: center;
@@ -129,14 +167,6 @@
       color: var(--ink);
       font: inherit;
     }
-    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 980px; background: #132230; }
-    th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: right; white-space: nowrap; }
-    th { position: sticky; top: 0; background: #1c3242; color: #d8e9f6; font-weight: 700; z-index: 1; }
-    th:first-child, td:first-child { text-align: left; }
-    tbody tr:nth-child(even) { background: #172838; }
-    .err { color: var(--danger); font-weight: 700; margin-top: 8px; }
-    #empty-note { margin-top: 10px; }
     .chart-box {
       height: 700px;
       margin-top: 10px;
@@ -155,6 +185,7 @@
     @media (max-width: 600px) {
       .actions { flex-direction: column; }
       button { width: 100%; }
+      .chart-box { height: 560px; }
     }
   </style>
 </head>
@@ -167,6 +198,7 @@
       </div>
       <span class="brand-tag">Find The Fat Pitch</span>
     </div>
+
     <div class="card">
       <h1>YEPSTOCKS</h1>
       <p>One-button scan across S&amp;P 500 + Nasdaq-100 using fixed house rules.</p>
@@ -191,29 +223,16 @@
     </div>
 
     <div class="card">
-      <h2>Matches</h2>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr><th>Symbol</th><th>Dir</th><th>Setup</th><th>Course%</th><th>Pattern%</th><th>Bias</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>BB Exp</th><th>Pre3x</th><th>Hist N</th><th>Hist WR%</th><th>Hist Avg%</th><th>Tgt Mid%</th><th>Tgt Band%</th><th>Risk%</th><th>RR Mid</th><th>SetupScore</th><th>$Vol20</th></tr>
-          </thead>
-          <tbody id="results-body"></tbody>
-        </table>
-      </div>
+      <h2>Signals</h2>
       <p id="empty-note">No matches yet. Run a scan.</p>
-    </div>
-
-    <div class="card">
-      <h2>Charts</h2>
-      <div id="charts"></div>
+      <div id="signal-feed" class="signal-feed"></div>
     </div>
   </div>
 
   <script>
     const form = document.getElementById('scan-form');
-    const resultsBody = document.getElementById('results-body');
+    const signalFeed = document.getElementById('signal-feed');
     const emptyNote = document.getElementById('empty-note');
-    const charts = document.getElementById('charts');
     const status = document.getElementById('scan-status');
     const scanBtn = document.getElementById('scan-btn');
     const tierEl = document.getElementById('m-tier');
@@ -221,21 +240,16 @@
     const matchesEl = document.getElementById('m-matches');
     const calendarNote = document.getElementById('calendar-note');
     const calendarList = document.getElementById('calendar-list');
-    let activeController = null;
-    let isScanning = false;
-    let sortQueued = false;
-    let chartLoadInFlight = false;
-    const chartModels = [];
 
-    function pick(idx, series) { return idx.map(i => series[i]); }
+    let activeController = null;
+    const models = [];
+    const modelBySymbol = new Map();
+    let chartQueue = [];
+    let chartWorkerActive = false;
+
     function pickRecent(idx, series, maxPoints = 4) {
       const start = Math.max(0, idx.length - maxPoints);
-      const subset = idx.slice(start);
-      return subset.map(i => series[i]);
-    }
-    function recentIdx(idx, maxPoints = 4) {
-      const start = Math.max(0, idx.length - maxPoints);
-      return idx.slice(start);
+      return idx.slice(start).map(i => series[i]);
     }
 
     function num(v, fallback = 0) {
@@ -243,83 +257,8 @@
       return Number.isFinite(n) ? n : fallback;
     }
 
-    function sortResultRows() {
-      const rows = Array.from(resultsBody.querySelectorAll('tr'));
-      rows.sort((a, b) => {
-        const aScore = num(a.dataset.rank, 0);
-        const bScore = num(b.dataset.rank, 0);
-        if (bScore !== aScore) return bScore - aScore;
-        const aBb = num(a.dataset.bbexp, 0);
-        const bBb = num(b.dataset.bbexp, 0);
-        if (bBb !== aBb) return bBb - aBb;
-        const aPattern = num(a.dataset.pattern, 0);
-        const bPattern = num(b.dataset.pattern, 0);
-        if (bPattern !== aPattern) return bPattern - aPattern;
-        const aPre3x = num(a.dataset.pre3x, 0);
-        const bPre3x = num(b.dataset.pre3x, 0);
-        if (bPre3x !== aPre3x) return bPre3x - aPre3x;
-        const aHistWr = num(a.dataset.histwr, 0);
-        const bHistWr = num(b.dataset.histwr, 0);
-        if (bHistWr !== aHistWr) return bHistWr - aHistWr;
-        const aSym = String(a.dataset.symbol || '');
-        const bSym = String(b.dataset.symbol || '');
-        return aSym.localeCompare(bSym);
-      });
-      for (const r of rows) resultsBody.appendChild(r);
-    }
-
-    function queueSortResultRows() {
-      if (sortQueued) return;
-      sortQueued = true;
-      requestAnimationFrame(() => {
-        sortQueued = false;
-        sortResultRows();
-      });
-    }
-
-    async function loadChartForSymbol(symbol, tier) {
-      if (isScanning) {
-        status.textContent = 'Scan is running. Click charts after scan completes to keep streaming fast.';
-        return;
-      }
-      if (chartLoadInFlight) {
-        status.textContent = 'A chart is already loading. Please wait one moment.';
-        return;
-      }
-      const existing = chartModels.find(m => (m.chart?.symbol || '') === symbol);
-      if (existing) {
-        return;
-      }
-      try {
-        chartLoadInFlight = true;
-        status.textContent = `Loading chart: ${symbol}...`;
-        const resp = await fetch(`/chart_payload?symbol=${encodeURIComponent(symbol)}`);
-        if (!resp.ok) {
-          status.textContent = `Chart load failed for ${symbol} (${resp.status})`;
-          return;
-        }
-        const payload = await resp.json();
-        if (payload.error) {
-          status.textContent = `Chart load failed for ${symbol}: ${payload.error}`;
-          return;
-        }
-        if (!isValidChartPayload(payload)) {
-          status.textContent = `Chart load failed for ${symbol}: invalid payload`;
-          return;
-        }
-        chartModels.push({chart: payload, tier: tier || 'ranked', tf: '1D'});
-        addChart(chartModels[chartModels.length - 1]);
-        status.textContent = `Loaded chart: ${symbol}`;
-      } catch (err) {
-        status.textContent = `Chart load failed for ${symbol}: ${err}`;
-      } finally {
-        chartLoadInFlight = false;
-      }
-    }
-
-    function addRow(row, tier) {
-      const tr = document.createElement('tr');
-      const computedRank = (
+    function computeRank(row) {
+      return (
         (num(row.raw_setup_score, num(row.setup_score, 0)) * 1000.0) +
         (num(row.raw_score, num(row.score, 0)) * 10.0) +
         (num(row.raw_pre3x, num(row.pre3x, 0)) * 2.0) +
@@ -328,115 +267,104 @@
         (num(row.raw_pattern_similarity, num(row.pattern_similarity, 0) / 100.0) * 1000.0) +
         (num(row.raw_course_score, num(row.course_score, 0)) * 20.0)
       );
-      tr.dataset.rank = String(num(row.rank_score, computedRank));
-      tr.dataset.pre3x = String(num(row.raw_pre3x, num(row.pre3x, 0)));
-      tr.dataset.histwr = String(num(row.raw_hist_wr, num(row.hist_wr, 0) / 100.0) * 100.0);
-      tr.dataset.bbexp = String(num(row.raw_bb_expansion, num(row.bb_expansion, 0)));
-      tr.dataset.pattern = String(num(row.raw_pattern_similarity, num(row.pattern_similarity, 0) / 100.0) * 100.0);
-      tr.dataset.symbol = String(row.symbol || '');
-      tr.dataset.tier = String(tier || 'ranked');
-      tr.innerHTML = `
-        <td>${row.symbol}</td>
-        <td>${row.dir}</td>
-        <td>${row.setup}</td>
-        <td>${num(row.course_score, 0).toFixed(1)}</td>
-        <td>${num(row.pattern_similarity, 0).toFixed(1)}</td>
-        <td>${String(row.pattern_mode || row.dir || 'N/A')}</td>
-        <td>${row.close.toFixed(2)}</td>
-        <td>${row.sma50.toFixed(2)}</td>
-        <td>${row.sma89.toFixed(2)}</td>
-        <td>${row.sma200.toFixed(2)}</td>
-        <td>${row.stoch_k.toFixed(2)}</td>
-        <td>${row.macd_hist.toFixed(3)}</td>
-        <td>${row.adx.toFixed(2)}</td>
-        <td>${row.macd_cross_age}</td>
-        <td>${row.stoch_cross_age}</td>
-        <td>${row.bb_expansion.toFixed(3)}</td>
-        <td>${row.pre3x.toFixed(2)}</td>
-        <td>${row.hist_n}</td>
-        <td>${row.hist_wr.toFixed(1)}</td>
-        <td>${row.hist_avg.toFixed(2)}</td>
-        <td>${row.tgt_mid.toFixed(2)}</td>
-        <td>${row.tgt_band.toFixed(2)}</td>
-        <td>${row.risk.toFixed(2)}</td>
-        <td>${row.rr.toFixed(2)}</td>
-        <td>${row.setup_score.toFixed(1)}</td>
-        <td>${row.dollar_volume}</td>
+    }
+
+    function sortedSymbols(limit = 25) {
+      return models
+        .slice()
+        .sort((a, b) => b.rank - a.rank)
+        .slice(0, limit)
+        .map(m => m.symbol);
+    }
+
+    function insertCardSorted(model) {
+      model.card.dataset.rank = String(model.rank);
+      const cards = Array.from(signalFeed.children);
+      const insertBefore = cards.find(c => num(c.dataset.rank, 0) < model.rank);
+      if (insertBefore) {
+        signalFeed.insertBefore(model.card, insertBefore);
+      } else {
+        signalFeed.appendChild(model.card);
+      }
+    }
+
+    function cardHtml(model) {
+      const dirClass = String(model.row.dir || '').toUpperCase().includes('BULL') ? 'bull' : 'bear';
+      return `
+        <div class="signal-head">
+          <h3>${model.symbol}</h3>
+          <div class="signal-meta">
+            <span class="pill ${dirClass}">${model.row.dir}</span>
+            <span class="pill">${model.row.setup}</span>
+            <span class="pill">Score ${num(model.row.setup_score, 0).toFixed(1)}</span>
+            <span class="pill">BBExp ${num(model.row.bb_expansion, 0).toFixed(3)}</span>
+          </div>
+        </div>
+        <div class="chart-controls">
+          <span>Candle Timeframe</span>
+          <select id="${model.id}-tf">
+            <option value="1D">1D</option>
+            <option value="233m">233m</option>
+            <option value="55m">55m</option>
+            <option value="34m">34m</option>
+            <option value="21m">21m</option>
+            <option value="13m">13m</option>
+            <option value="8m">8m</option>
+            <option value="5m">5m</option>
+          </select>
+        </div>
+        <div id="${model.id}-plot" class="chart-box"></div>
       `;
-      tr.style.cursor = 'pointer';
-      tr.title = 'Click to load chart';
-      tr.addEventListener('click', () => loadChartForSymbol(row.symbol, tier));
-      resultsBody.appendChild(tr);
-      queueSortResultRows();
     }
 
-    function renderCharts() {
-      charts.innerHTML = '';
-      for (const model of chartModels) {
-        addChart(model);
-      }
-    }
-
-    function _tfOptions(selected) {
-      const vals = ['1D', '233m', '55m', '34m', '21m', '13m', '8m', '5m'];
-      return vals.map(v => `<option value="${v}" ${v === selected ? 'selected' : ''}>${v}</option>`).join('');
-    }
-
-    function topSymbolsForCalendar(limit = 25) {
-      const rows = Array.from(resultsBody.querySelectorAll('tr'));
-      return rows.slice(0, limit).map(r => String(r.dataset.symbol || '').trim()).filter(Boolean);
-    }
-
-    async function loadCalendar(symbols = []) {
-      try {
-        calendarNote.textContent = 'Loading upcoming events...';
-        calendarList.innerHTML = '';
-        const qs = new URLSearchParams();
-        qs.set('days', '7');
-        if (symbols.length) qs.set('symbols', symbols.join(','));
-        const resp = await fetch(`/calendar_events?${qs.toString()}`);
-        if (!resp.ok) {
-          calendarNote.textContent = `Calendar unavailable (${resp.status}).`;
-          return;
-        }
-        const payload = await resp.json();
-        const events = Array.isArray(payload.events) ? payload.events : [];
-        if (!events.length) {
-          calendarNote.textContent = 'No major events in the next 7 days.';
-          return;
-        }
-        calendarNote.textContent = `Loaded ${events.length} event(s) for the next ${payload.days || 7} day(s).`;
-        for (const ev of events) {
-          const li = document.createElement('li');
-          const sym = String(ev.label || '').includes('Earnings') ? ' [earnings]' : '';
-          li.textContent = `${ev.date} - ${ev.label}${sym}`;
-          calendarList.appendChild(li);
-        }
-      } catch (err) {
-        calendarNote.textContent = `Calendar load failed: ${err}`;
-      }
+    function makeModel(row, tier) {
+      const symbol = String(row.symbol || '').trim();
+      const id = `signal-${symbol}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      const card = document.createElement('article');
+      card.className = 'signal-card';
+      const model = {
+        id,
+        symbol,
+        tier: tier || 'ranked',
+        row,
+        rank: computeRank(row),
+        tf: '1D',
+        chart: null,
+        loading: false,
+        card,
+      };
+      card.innerHTML = cardHtml(model);
+      const tfSel = card.querySelector(`#${id}-tf`);
+      tfSel.addEventListener('change', () => {
+        model.tf = tfSel.value;
+        drawChart(model);
+      });
+      return model;
     }
 
     function isValidChartPayload(payload) {
       return !!(payload && typeof payload === 'object' && payload.symbol && payload.timeframes && typeof payload.timeframes === 'object');
     }
 
-    function drawChart(model, plotId) {
+    function drawChart(model) {
+      if (!model.chart) return;
       if (typeof Plotly === 'undefined') {
         status.textContent = 'Charts unavailable: Plotly CDN did not load.';
         return;
       }
-      const tf = model.tf || '1D';
       const chartBundle = model.chart;
       if (!isValidChartPayload(chartBundle)) {
-        status.textContent = 'Chart payload was incomplete. Try selecting the symbol again.';
+        status.textContent = `Chart payload was incomplete for ${model.symbol}.`;
         return;
       }
+      const plotId = `${model.id}-plot`;
+      const tf = model.tf || '1D';
       const rawView = chartBundle.timeframes[tf] || chartBundle.timeframes['1D'] || Object.values(chartBundle.timeframes)[0];
       if (!rawView || !Array.isArray(rawView.dates) || rawView.dates.length === 0) {
         status.textContent = `No chart data available for ${chartBundle.symbol} (${tf}).`;
         return;
       }
+
       const trimByTf = { '1D': 320, '233m': 120, '55m': 90, '34m': 80, '21m': 70, '13m': 60, '8m': 50, '5m': 40 };
       const keep = trimByTf[tf] || 320;
       const start = Math.max(0, (rawView?.dates?.length || 0) - keep);
@@ -463,45 +391,12 @@
         stoch_cross_up_idx: (rawView?.stoch_cross_up_idx || []).map(i => i - start).filter(i => i >= 0),
         stoch_cross_down_idx: (rawView?.stoch_cross_down_idx || []).map(i => i - start).filter(i => i >= 0)
       };
-      if (!view) return;
 
       const x = view.dates;
       const intraday = String(view.timeframe || '').endsWith('m');
       const tinyTf = ['34m', '21m', '13m', '8m', '5m'].includes(tf);
       const compactTf = intraday;
-      const eventLineColor = {high: '#f26d6d', medium: '#f2bf5a', low: '#6da7f2'};
-      const eventShapes = [];
-      const eventAnnotations = [];
-      const events = intraday ? [] : (view.events || []).slice(-8);
-      const annotatedEvents = intraday ? [] : events.slice(-3);
-      for (const ev of events) {
-        const c = eventLineColor[ev.severity] || '#f2bf5a';
-        eventShapes.push({
-          type: 'line',
-          xref: 'x',
-          yref: 'paper',
-          x0: ev.date,
-          x1: ev.date,
-          y0: 0,
-          y1: 1,
-          line: {color: c, width: 1, dash: 'dot'}
-        });
-      }
-      for (const ev of annotatedEvents) {
-        const c = eventLineColor[ev.severity] || '#f2bf5a';
-        eventAnnotations.push({
-          xref: 'x',
-          yref: 'paper',
-          x: ev.date,
-          y: 1.02,
-          text: ev.label,
-          showarrow: false,
-          font: {size: 10, color: c},
-          xanchor: 'left',
-          align: 'left',
-          bgcolor: 'rgba(19,34,48,0.75)'
-        });
-      }
+
       const traces = [
         {
           type: 'candlestick',
@@ -541,8 +436,6 @@
         hovermode: compactTf ? 'x' : 'x unified',
         legend: {orientation: 'h', y: -0.08, font: {size: compactTf ? 9 : 10}},
         grid: {rows: 3, columns: 1, pattern: 'independent', roworder: 'top to bottom'},
-        shapes: eventShapes,
-        annotations: eventAnnotations,
         xaxis: {
           domain: [0, 1],
           anchor: 'y',
@@ -562,49 +455,118 @@
       }, {responsive: true});
     }
 
-    function addChart(model) {
-      const chartBundle = model.chart;
-      if (!isValidChartPayload(chartBundle)) {
-        status.textContent = 'Skipped a chart due to invalid payload.';
-        return;
+    async function loadChartPayload(symbol) {
+      const resp = await fetch(`/chart_payload?symbol=${encodeURIComponent(symbol)}`);
+      if (!resp.ok) throw new Error(`request failed (${resp.status})`);
+      const payload = await resp.json();
+      if (payload.error) throw new Error(payload.error);
+      if (!isValidChartPayload(payload)) throw new Error('invalid payload');
+      return payload;
+    }
+
+    function queueChart(model) {
+      if (!model || model.loading || model.chart) return;
+      model.loading = true;
+      chartQueue.push(model);
+      processChartQueue();
+    }
+
+    async function processChartQueue() {
+      if (chartWorkerActive) return;
+      chartWorkerActive = true;
+      try {
+        while (chartQueue.length) {
+          const model = chartQueue.shift();
+          if (!model || model.chart) continue;
+          status.textContent = `Loading chart: ${model.symbol}...`;
+          try {
+            model.chart = await loadChartPayload(model.symbol);
+            drawChart(model);
+          } catch (err) {
+            status.textContent = `Chart load failed for ${model.symbol}: ${err}`;
+          } finally {
+            model.loading = false;
+          }
+        }
+      } finally {
+        chartWorkerActive = false;
       }
-      const tier = model.tier;
-      const id = `chart-${chartBundle.symbol}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      const selId = `${id}-tf`;
-      const block = document.createElement('div');
-      block.innerHTML = `
-        <h3>${chartBundle.symbol} (${tier})</h3>
-        <div class="chart-controls">
-          <span>Candle Timeframe</span>
-          <select id="${selId}">${_tfOptions(model.tf || '1D')}</select>
-        </div>
-        <div id="${id}" class="chart-box"></div>
-      `;
-      charts.appendChild(block);
-      const sel = document.getElementById(selId);
-      if (sel) {
-        sel.addEventListener('change', () => {
-          model.tf = sel.value;
-          drawChart(model, id);
-        });
+    }
+
+    async function loadCalendar(symbols = []) {
+      try {
+        calendarNote.textContent = 'Loading upcoming events...';
+        calendarList.innerHTML = '';
+        const qs = new URLSearchParams();
+        qs.set('days', '7');
+        if (symbols.length) qs.set('symbols', symbols.join(','));
+        const resp = await fetch(`/calendar_events?${qs.toString()}`);
+        if (!resp.ok) {
+          calendarNote.textContent = `Calendar unavailable (${resp.status}).`;
+          return;
+        }
+        const payload = await resp.json();
+        const events = Array.isArray(payload.events) ? payload.events : [];
+        if (!events.length) {
+          calendarNote.textContent = 'No major events in the next 7 days.';
+          return;
+        }
+        calendarNote.textContent = `Loaded ${events.length} event(s) for the next ${payload.days || 7} day(s).`;
+        for (const ev of events) {
+          const li = document.createElement('li');
+          const sym = String(ev.label || '').includes('Earnings') ? ' [earnings]' : '';
+          li.textContent = `${ev.date} - ${ev.label}${sym}`;
+          calendarList.appendChild(li);
+        }
+      } catch (err) {
+        calendarNote.textContent = `Calendar load failed: ${err}`;
       }
-      requestAnimationFrame(() => drawChart(model, id));
     }
 
     async function handleMessage(msg) {
       if (msg.type === 'status' || msg.type === 'progress') {
         status.textContent = msg.message;
-      } else if (msg.type === 'match') {
+        return;
+      }
+      if (msg.type === 'match') {
         emptyNote.style.display = 'none';
-        addRow(msg.row, msg.tier);
-        status.textContent = `Match: ${msg.row.symbol} (${msg.tier})`;
-      } else if (msg.type === 'error') {
+        const symbol = String(msg.row?.symbol || '').trim();
+        if (!symbol) return;
+        if (modelBySymbol.has(symbol)) {
+          const existing = modelBySymbol.get(symbol);
+          existing.row = msg.row;
+          existing.rank = computeRank(msg.row);
+          existing.card.innerHTML = cardHtml(existing);
+          insertCardSorted(existing);
+          const tfSel = existing.card.querySelector(`#${existing.id}-tf`);
+          if (tfSel) {
+            tfSel.value = existing.tf;
+            tfSel.addEventListener('change', () => {
+              existing.tf = tfSel.value;
+              drawChart(existing);
+            });
+          }
+          if (existing.chart) drawChart(existing);
+          return;
+        }
+        const model = makeModel(msg.row, msg.tier);
+        models.push(model);
+        modelBySymbol.set(symbol, model);
+        insertCardSorted(model);
+        queueChart(model);
+        status.textContent = `Match: ${symbol}`;
+        return;
+      }
+      if (msg.type === 'error') {
         status.textContent = `Error: ${msg.message}`;
-      } else if (msg.type === 'done') {
-        sortResultRows();
+        return;
+      }
+      if (msg.type === 'done') {
         status.textContent = `Done. ${msg.count} match(es), tier: ${msg.tier}`;
-        loadCalendar(topSymbolsForCalendar());
-      } else if (msg.type === 'metrics') {
+        await loadCalendar(sortedSymbols());
+        return;
+      }
+      if (msg.type === 'metrics') {
         tierEl.textContent = `Tier: ${msg.tier}`;
         scannedEl.textContent = `Scanned: ${msg.scanned}/${msg.total}`;
         matchesEl.textContent = `Matches: ${msg.matches}`;
@@ -613,38 +575,35 @@
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      resultsBody.innerHTML = '';
-      charts.innerHTML = '';
-      chartModels.length = 0;
-      isScanning = true;
+      signalFeed.innerHTML = '';
       emptyNote.style.display = 'block';
+      models.length = 0;
+      modelBySymbol.clear();
+      chartQueue = [];
+      chartWorkerActive = false;
+
       status.textContent = 'Starting scan...';
       tierEl.textContent = 'Tier: init';
       scannedEl.textContent = 'Scanned: 0/0';
       matchesEl.textContent = 'Matches: 0';
       scanBtn.disabled = true;
 
-      if (activeController) {
-        activeController.abort();
-      }
+      if (activeController) activeController.abort();
       activeController = new AbortController();
 
       try {
         const resp = await fetch('/scan_stream', { method: 'POST', body: new FormData(form), signal: activeController.signal });
         if (!resp.ok) {
           status.textContent = `Error: request failed (${resp.status})`;
-          scanBtn.disabled = false;
           return;
         }
 
         if (!resp.body || !resp.body.getReader) {
-          // Browser fallback: parse NDJSON after full response.
           const text = await resp.text();
           for (const line of text.split('\n')) {
             if (!line.trim()) continue;
             await handleMessage(JSON.parse(line));
           }
-          scanBtn.disabled = false;
           return;
         }
 
@@ -658,7 +617,6 @@
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
           buffer = lines.pop();
-
           for (const line of lines) {
             if (!line.trim()) continue;
             await handleMessage(JSON.parse(line));
@@ -671,14 +629,12 @@
           status.textContent = `Error: ${err}`;
         }
       } finally {
-        isScanning = false;
         scanBtn.disabled = false;
         activeController = null;
       }
     });
 
     loadCalendar([]);
-
   </script>
 </body>
 </html>
