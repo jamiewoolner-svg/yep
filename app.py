@@ -1199,7 +1199,7 @@ def scan_stream() -> Response:
     base_args = _ranked_scan_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = min(1, max(0, int(base_args.max_retries)))
-    target_hits = max(1, int(os.getenv("TARGET_HITS", "100")))
+    output_limit = max(1, int(os.getenv("OUTPUT_LIMIT", "30")))
     max_tune_steps = max(1, int(os.getenv("MAX_TUNE_STEPS", "6")))
     max_scan_seconds = max(60, int(os.getenv("MAX_SCAN_SECONDS", "420")))
 
@@ -1261,6 +1261,7 @@ def scan_stream() -> Response:
         scan_start_ts = time.time()
         found = 0
         total_symbols = len(symbols)
+        candidate_rows: dict[str, dict[str, Any]] = {}
         yield json.dumps({"type": "status", "message": f"Universe size: {total_symbols} symbols"}) + "\n"
         strict_args = _tuned_args(0)
         src = str(getattr(strict_args, "data_source", "auto")).lower()
@@ -1289,7 +1290,7 @@ def scan_stream() -> Response:
             yield json.dumps({"type": "status", "message": f"Reference pattern skipped: {reference_error}"}) + "\n"
         yield json.dumps({"type": "metrics", "scanned": 0, "matches": 0, "total": total_symbols, "tier": "live"}) + "\n"
         yield json.dumps(
-            {"type": "status", "message": f"Scanning universe with auto-tune target={target_hits}...", "tier": "live"}
+            {"type": "status", "message": f"Scanning full universe; returning top {output_limit} closest setups...", "tier": "live"}
         ) + "\n"
 
         scanned_symbols: set[str] = set()
@@ -1307,7 +1308,7 @@ def scan_stream() -> Response:
                     }
                 ) + "\n"
                 break
-            if not remaining_symbols or found >= target_hits:
+            if not remaining_symbols:
                 break
             tune_args = _tuned_args(step)
             yield json.dumps(
@@ -1315,7 +1316,7 @@ def scan_stream() -> Response:
                     "type": "status",
                     "message": (
                         f"tune step {step + 1}/{max_tune_steps}: "
-                        f"remaining={len(remaining_symbols)} hits={found}/{target_hits}"
+                        f"remaining={len(remaining_symbols)} candidates={found}"
                     ),
                     "tier": "live",
                 }
@@ -1363,7 +1364,7 @@ def scan_stream() -> Response:
                         found += 1
                         matched_symbols.add(sym)
                         row = _result_row(analyzed)
-                        yield json.dumps({"type": "match", "tier": "live", "row": row}) + "\n"
+                        candidate_rows[sym] = row
                         yield json.dumps(
                             {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "live"}
                         ) + "\n"
@@ -1381,10 +1382,22 @@ def scan_stream() -> Response:
             yield json.dumps(
                 {"type": "error", "message": f"No-skips mode failed. Could not fetch {len(hard_failures)} symbol(s). First: {first[0]} ({first[1]})"}
             ) + "\n"
-            yield json.dumps({"type": "done", "count": found, "tier": "live"}) + "\n"
+            yield json.dumps({"type": "done", "count": min(len(candidate_rows), output_limit), "tier": "live"}) + "\n"
             return
 
-        yield json.dumps({"type": "done", "count": found, "tier": "live"}) + "\n"
+        ordered_rows = sorted(candidate_rows.values(), key=lambda r: float(r.get("rank_score", 0.0)), reverse=True)[:output_limit]
+        for row in ordered_rows:
+            yield json.dumps({"type": "match", "tier": "live", "row": row}) + "\n"
+
+        yield json.dumps(
+            {
+                "type": "status",
+                "message": f"Full scan complete. Showing top {len(ordered_rows)} closest setups.",
+                "tier": "live",
+            }
+        ) + "\n"
+
+        yield json.dumps({"type": "done", "count": len(ordered_rows), "tier": "live"}) + "\n"
 
     return Response(_generate(), mimetype="application/x-ndjson")
 
