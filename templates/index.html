@@ -103,6 +103,15 @@
     }
     .metrics { display: flex; gap: 10px; font-size: 12px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
     .metrics span { background: #152432; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
+    .calendar-list {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--ink);
+      max-height: 220px;
+      overflow: auto;
+    }
+    .calendar-list li { margin: 4px 0; }
+    .calendar-empty { color: var(--muted); margin: 0; }
     .chart-controls {
       display: flex;
       align-items: center;
@@ -171,8 +180,15 @@
         <span id="m-tier">Tier: -</span>
         <span id="m-scanned">Scanned: 0/0</span>
         <span id="m-matches">Matches: 0</span>
+        <span id="m-blocked">Blocked(7d events): 0</span>
       </div>
       {% if error %}<p class="err">{{ error }}</p>{% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Upcoming Risk Calendar (7 Days)</h2>
+      <p id="calendar-note" class="calendar-empty">Loading upcoming macro events...</p>
+      <ul id="calendar-list" class="calendar-list"></ul>
     </div>
 
     <div class="card">
@@ -204,6 +220,9 @@
     const tierEl = document.getElementById('m-tier');
     const scannedEl = document.getElementById('m-scanned');
     const matchesEl = document.getElementById('m-matches');
+    const blockedEl = document.getElementById('m-blocked');
+    const calendarNote = document.getElementById('calendar-note');
+    const calendarList = document.getElementById('calendar-list');
     let activeController = null;
     let isScanning = false;
     let sortQueued = false;
@@ -352,6 +371,41 @@
     function _tfOptions(selected) {
       const vals = ['1D', '233m', '55m', '34m', '21m', '13m', '8m', '5m'];
       return vals.map(v => `<option value="${v}" ${v === selected ? 'selected' : ''}>${v}</option>`).join('');
+    }
+
+    function topSymbolsForCalendar(limit = 25) {
+      const rows = Array.from(resultsBody.querySelectorAll('tr'));
+      return rows.slice(0, limit).map(r => String(r.dataset.symbol || '').trim()).filter(Boolean);
+    }
+
+    async function loadCalendar(symbols = []) {
+      try {
+        calendarNote.textContent = 'Loading upcoming events...';
+        calendarList.innerHTML = '';
+        const qs = new URLSearchParams();
+        qs.set('days', '7');
+        if (symbols.length) qs.set('symbols', symbols.join(','));
+        const resp = await fetch(`/calendar_events?${qs.toString()}`);
+        if (!resp.ok) {
+          calendarNote.textContent = `Calendar unavailable (${resp.status}).`;
+          return;
+        }
+        const payload = await resp.json();
+        const events = Array.isArray(payload.events) ? payload.events : [];
+        if (!events.length) {
+          calendarNote.textContent = 'No major events in the next 7 days.';
+          return;
+        }
+        calendarNote.textContent = `Loaded ${events.length} event(s) for the next ${payload.days || 7} day(s).`;
+        for (const ev of events) {
+          const li = document.createElement('li');
+          const sym = String(ev.label || '').includes('Earnings') ? ' [earnings]' : '';
+          li.textContent = `${ev.date} - ${ev.label}${sym}`;
+          calendarList.appendChild(li);
+        }
+      } catch (err) {
+        calendarNote.textContent = `Calendar load failed: ${err}`;
+      }
     }
 
     function isValidChartPayload(payload) {
@@ -537,11 +591,13 @@
         status.textContent = `Error: ${msg.message}`;
       } else if (msg.type === 'done') {
         sortResultRows();
-        status.textContent = `Done. ${msg.count} match(es), tier: ${msg.tier}`;
+        status.textContent = `Done. ${msg.count} match(es), blocked ${num(msg.blocked, 0)} by next-week events, tier: ${msg.tier}`;
+        loadCalendar(topSymbolsForCalendar());
       } else if (msg.type === 'metrics') {
         tierEl.textContent = `Tier: ${msg.tier}`;
         scannedEl.textContent = `Scanned: ${msg.scanned}/${msg.total}`;
         matchesEl.textContent = `Matches: ${msg.matches}`;
+        blockedEl.textContent = `Blocked(7d events): ${num(msg.blocked, 0)}`;
       }
     }
 
@@ -556,6 +612,7 @@
       tierEl.textContent = 'Tier: init';
       scannedEl.textContent = 'Scanned: 0/0';
       matchesEl.textContent = 'Matches: 0';
+      blockedEl.textContent = 'Blocked(7d events): 0';
       scanBtn.disabled = true;
 
       if (activeController) {
@@ -610,6 +667,8 @@
         activeController = null;
       }
     });
+
+    loadCalendar([]);
 
   </script>
 </body>

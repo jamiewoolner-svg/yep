@@ -55,6 +55,7 @@ BLS_EMPLOYMENT_SCHEDULE_URL = "https://www.bls.gov/schedule/news_release/empsit.
 YAHOO_QUOTE_SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary"
 EVENT_LOOKAHEAD_DAYS = int(os.getenv("EVENT_LOOKAHEAD_DAYS", "120"))
 EVENT_CACHE_TTL_SEC = int(os.getenv("EVENT_CACHE_TTL_SEC", "1800"))
+EVENT_BLOCK_DAYS = int(os.getenv("EVENT_BLOCK_DAYS", "7"))
 _EVENT_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _EVENT_CACHE_LOCK = threading.Lock()
 
@@ -281,6 +282,26 @@ def _risk_events_for_symbol(symbol: str, chart_dates: list[str]) -> list[dict[st
     filtered = [e for e in events if start <= datetime.strptime(e["date"], "%Y-%m-%d").date() <= end]
     filtered.sort(key=lambda x: x["date"])
     return filtered
+
+
+def _upcoming_events_for_symbol(
+    symbol: str, days_ahead: int = EVENT_BLOCK_DAYS, macro_events: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    today = date.today()
+    end = today + timedelta(days=max(1, int(days_ahead)))
+    macro = macro_events if macro_events is not None else (_fetch_fed_events(days_ahead) + _fetch_labor_events(days_ahead))
+    combined = list(macro) + _fetch_symbol_earnings_event(symbol, days_ahead)
+    out: list[dict[str, Any]] = []
+    for event in combined:
+        raw = str(event.get("date", "")).strip()
+        try:
+            event_date = datetime.strptime(raw, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if today <= event_date <= end:
+            out.append(event)
+    out.sort(key=lambda e: (e.get("date", ""), e.get("label", "")))
+    return out
 
 
 def _safe_num(value: Any, ndigits: int = 3) -> float:
@@ -887,6 +908,7 @@ def scan_stream() -> Response:
     base_args = _ranked_scan_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = max(0, int(base_args.max_retries))
+    macro_block_events = _fetch_fed_events(EVENT_BLOCK_DAYS) + _fetch_labor_events(EVENT_BLOCK_DAYS)
     reference_symbol = str(os.getenv("PATTERN_REF_SYMBOL", "IBM")).strip().upper() or "IBM"
     reference_pattern = None
     reference_error = ""
@@ -900,6 +922,7 @@ def scan_stream() -> Response:
     @stream_with_context
     def _generate() -> Any:
         found = 0
+        blocked = 0
         total_symbols = len(symbols)
         yield json.dumps({"type": "status", "message": f"Universe size: {total_symbols} symbols"}) + "\n"
         if reference_pattern:
@@ -911,7 +934,7 @@ def scan_stream() -> Response:
             ) + "\n"
         elif reference_error:
             yield json.dumps({"type": "status", "message": f"Reference pattern skipped: {reference_error}"}) + "\n"
-        yield json.dumps({"type": "metrics", "scanned": 0, "matches": 0, "total": total_symbols, "tier": "ranked"}) + "\n"
+        yield json.dumps({"type": "metrics", "scanned": 0, "matches": 0, "blocked": 0, "total": total_symbols, "tier": "ranked"}) + "\n"
         yield json.dumps({"type": "status", "message": "Scanning ranked universe...", "tier": "ranked"}) + "\n"
 
         pending_symbols = list(symbols)
@@ -931,7 +954,7 @@ def scan_stream() -> Response:
                         {"type": "progress", "message": f"ranked: {scanned}/{len(symbols)} analyzed ({sym})"}
                     ) + "\n"
                     yield json.dumps(
-                        {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "ranked"}
+                        {"type": "metrics", "scanned": scanned, "matches": found, "blocked": blocked, "total": total_symbols, "tier": "ranked"}
                     ) + "\n"
 
                     try:
@@ -946,6 +969,20 @@ def scan_stream() -> Response:
                     if not analyzed:
                         continue
 
+                    # Hard event-risk guard: skip symbols with major macro/earnings events in the next week.
+                    blocking_events = _upcoming_events_for_symbol(analyzed.symbol, EVENT_BLOCK_DAYS, macro_events=macro_block_events)
+                    if blocking_events:
+                        blocked += 1
+                        if blocked <= 5 or blocked % 25 == 0:
+                            head = blocking_events[0]
+                            yield json.dumps(
+                                {
+                                    "type": "status",
+                                    "message": f"Blocked {analyzed.symbol}: {head.get('label', 'Event')} on {head.get('date', '')}",
+                                }
+                            ) + "\n"
+                        continue
+
                     if reference_pattern:
                         direct_similarity = _pattern_similarity(reference_pattern, analyzed)
                         inverse_similarity = _inverse_pattern_similarity(reference_pattern, analyzed)
@@ -958,7 +995,7 @@ def scan_stream() -> Response:
                     row = _result_row(analyzed)
                     yield json.dumps({"type": "match", "tier": "ranked", "row": row}) + "\n"
                     yield json.dumps(
-                        {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "ranked"}
+                        {"type": "metrics", "scanned": scanned, "matches": found, "blocked": blocked, "total": total_symbols, "tier": "ranked"}
                     ) + "\n"
 
             if retry_symbols:
@@ -973,10 +1010,10 @@ def scan_stream() -> Response:
             yield json.dumps(
                 {"type": "error", "message": f"No-skips mode failed. Could not fetch {len(hard_failures)} symbol(s). First: {first[0]} ({first[1]})"}
             ) + "\n"
-            yield json.dumps({"type": "done", "count": found, "tier": "ranked"}) + "\n"
+            yield json.dumps({"type": "done", "count": found, "blocked": blocked, "tier": "ranked"}) + "\n"
             return
 
-        yield json.dumps({"type": "done", "count": found, "tier": "ranked"}) + "\n"
+        yield json.dumps({"type": "done", "count": found, "blocked": blocked, "tier": "ranked"}) + "\n"
 
     return Response(_generate(), mimetype="application/x-ndjson")
 
@@ -991,6 +1028,30 @@ def chart_payload() -> Response:
         return Response(json.dumps(payload), mimetype="application/json")
     except Exception as exc:
         return Response(json.dumps({"error": str(exc)}), status=500, mimetype="application/json")
+
+
+@app.route("/calendar_events", methods=["GET"])
+def calendar_events() -> Response:
+    raw_days = str(request.args.get("days", str(EVENT_BLOCK_DAYS))).strip()
+    try:
+        days = max(1, min(21, int(raw_days)))
+    except ValueError:
+        days = EVENT_BLOCK_DAYS
+
+    raw_symbols = str(request.args.get("symbols", "")).strip().upper()
+    symbols = [s for s in dict.fromkeys([x.strip() for x in raw_symbols.split(",") if x.strip()]) if re.fullmatch(r"[A-Z]{1,5}", s)]
+    symbols = symbols[:40]
+
+    events = _fetch_fed_events(days) + _fetch_labor_events(days)
+    for sym in symbols:
+        events.extend(_fetch_symbol_earnings_event(sym, days))
+
+    uniq: dict[tuple[str, str], dict[str, Any]] = {}
+    for event in events:
+        key = (str(event.get("date", "")), str(event.get("label", "")))
+        uniq[key] = event
+    ordered = sorted(uniq.values(), key=lambda e: (e.get("date", ""), e.get("label", "")))
+    return Response(json.dumps({"days": days, "events": ordered}), mimetype="application/json")
 
 
 @app.route("/simple", methods=["GET", "POST"])
