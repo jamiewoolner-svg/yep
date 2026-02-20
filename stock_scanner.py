@@ -31,6 +31,8 @@ STOOQ_URL = "https://stooq.com/q/d/l/"
 POLYGON_AGGS_URL = "https://api.polygon.io/v2/aggs/ticker"
 SP500_CONSTITUENTS_URL = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
 NASDAQ100_COMPANIES_URL = "https://www.nasdaq.com/solutions/global-indexes/nasdaq-100/companies"
+WIKIPEDIA_NASDAQ100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
+NASDAQ100_FALLBACK_CSV_URL = "https://raw.githubusercontent.com/Gary-Strauss/NASDAQ100_Constituents/master/data/nasdaq100_constituents.csv"
 POWS_BB_LENGTH = 21
 POWS_BB_STDDEV = 2.0
 POWS_SMA_FAST = 50
@@ -300,6 +302,42 @@ def _dedupe_symbols(symbols: Sequence[str]) -> List[str]:
     return deduped
 
 
+def _parse_symbols_from_html_table(raw: str) -> List[str]:
+    symbols: List[str] = []
+    tables = re.findall(r"<table[^>]*>(.*?)</table>", raw, flags=re.IGNORECASE | re.DOTALL)
+    for table in tables:
+        if "Ticker" not in table and "Symbol" not in table:
+            continue
+        rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table, flags=re.IGNORECASE | re.DOTALL)
+        if not rows:
+            continue
+        header_cells = re.findall(r"<th[^>]*>(.*?)</th>", rows[0], flags=re.IGNORECASE | re.DOTALL)
+        header_text = [re.sub(r"<[^>]+>", "", html.unescape(x)).strip().lower() for x in header_cells]
+        ticker_idx = next((i for i, h in enumerate(header_text) if ("ticker" in h or "symbol" in h)), None)
+        if ticker_idx is None:
+            continue
+
+        for row in rows[1:]:
+            cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, flags=re.IGNORECASE | re.DOTALL)
+            if ticker_idx >= len(cells):
+                continue
+            raw_symbol = re.sub(r"<[^>]+>", "", html.unescape(cells[ticker_idx]))
+            raw_symbol = re.sub(r"\[[^\]]+\]", "", raw_symbol).strip().upper()
+            raw_symbol = raw_symbol.replace("\xa0", "").replace(" ", "")
+            if re.fullmatch(r"[A-Z]{1,5}", raw_symbol):
+                symbols.append(raw_symbol)
+    return _dedupe_symbols(symbols)
+
+
+def _parse_symbols_from_csv(raw: str, symbol_column: str = "Ticker") -> List[str]:
+    symbols: List[str] = []
+    for row in csv.DictReader(raw.splitlines()):
+        symbol = (row.get(symbol_column) or row.get("Symbol") or "").strip().upper()
+        if re.fullmatch(r"[A-Z]{1,5}", symbol):
+            symbols.append(symbol)
+    return _dedupe_symbols(symbols)
+
+
 def _polygon_key() -> str:
     key = POLYGON_API_KEY or os.getenv("POLYGON_API_KEY", "")
     if not key:
@@ -424,51 +462,33 @@ def fetch_sp500_symbols() -> List[str]:
 
 
 def fetch_nasdaq100_symbols() -> List[str]:
-    req = urllib.request.Request(
-        NASDAQ100_COMPANIES_URL,
-        headers={"User-Agent": "Mozilla/5.0 (StockScannerCLI/1.0)"},
-    )
+    sources = [
+        ("nasdaq", NASDAQ100_COMPANIES_URL, "html"),
+        ("wikipedia", WIKIPEDIA_NASDAQ100_URL, "html"),
+        ("fallback_csv", NASDAQ100_FALLBACK_CSV_URL, "csv"),
+    ]
 
-    try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"failed to fetch Nasdaq-100 constituents: {exc}") from exc
-
-    # Parse visible text from page HTML and extract lines that look like ticker rows.
-    text = re.sub(r"<[^>]+>", "\n", raw)
-    text = html.unescape(text)
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-
-    symbols: List[str] = []
-    in_table = False
-    misses_after_table = 0
-    row_pattern = re.compile(r"^([A-Z]{1,5})(?:\s+.+)?$")
-
-    for line in lines:
-        if not in_table and ("Symbol" in line and "Company Name" in line):
-            in_table = True
-            misses_after_table = 0
-            continue
-        if not in_table:
+    last_error = "unknown"
+    for source_name, url, fmt in sources:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (StockScannerCLI/1.0)"})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+        except urllib.error.URLError as exc:
+            last_error = f"{source_name} fetch failed: {exc}"
             continue
 
-        m = row_pattern.match(line)
-        if m:
-            symbol = m.group(1).strip().upper()
-            if symbol and symbol not in {"ETF", "INDEX"}:
-                symbols.append(symbol)
-                misses_after_table = 0
-            continue
+        if fmt == "csv":
+            symbols = _parse_symbols_from_csv(raw)
+        else:
+            symbols = _parse_symbols_from_html_table(raw)
 
-        misses_after_table += 1
-        if len(symbols) >= 80 and misses_after_table > 100:
-            break
+        # Nasdaq-100 is ~100 names; accept if parsing yields a strong majority.
+        if len(symbols) >= 80:
+            return symbols
+        last_error = f"{source_name} parsing returned too few symbols ({len(symbols)})"
 
-    symbols = _dedupe_symbols(symbols)
-    if len(symbols) < 80:
-        raise RuntimeError("Nasdaq-100 source parsing returned too few symbols")
-    return symbols
+    raise RuntimeError(f"Nasdaq-100 source parsing returned too few symbols. Last error: {last_error}")
 
 
 def fetch_stooq_history(symbol: str) -> List[Candle]:
