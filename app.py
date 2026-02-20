@@ -417,12 +417,12 @@ def simple() -> str:
         """
 <!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Scanner Simple</title>
+<title>YEPSTOCKS Simple</title>
 <style>
 body{font-family:Arial,sans-serif;padding:16px} input,select{padding:6px;margin:4px} table{border-collapse:collapse;width:100%}
 th,td{border:1px solid #ddd;padding:6px;font-size:13px;text-align:right} th:first-child,td:first-child{text-align:left}
 </style></head><body>
-<h2>Scanner Simple (No JS)</h2>
+<h2>YEPSTOCKS Simple (No JS)</h2>
 <form method="post">
 <div><label>Symbols:</label><input name="symbols" value="{{ symbols }}" size="60"></div>
 <div><label><input type="checkbox" name="use_sp500" {% if use_sp500 %}checked{% endif %}> Use S&P500</label></div>
