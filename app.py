@@ -111,6 +111,7 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "macd_bear_cross_age": analyzed.macd_bear_cross_age,
         "stoch_bear_cross_age": analyzed.stoch_bear_cross_age,
         "bb_expansion": _safe_num(analyzed.band_width_expansion, 3),
+        "pre3x": _safe_num(max(analyzed.pre3x_bull_score, analyzed.pre3x_bear_score), 2),
         "dollar_volume": format_money(analyzed.dollar_volume20),
         "score": _safe_num(analyzed.score, 3),
     }

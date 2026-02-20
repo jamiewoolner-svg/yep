@@ -86,6 +86,8 @@ class ScanResult:
     dual_bear_cross_gap: int
     triple_cross_gap: int
     triple_bear_cross_gap: int
+    pre3x_bull_score: float
+    pre3x_bear_score: float
     touched_outer_band_recent: bool
     outer_touch_age: int
     band_width_expansion: float
@@ -983,6 +985,13 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         else 999
     )
 
+    price_gap_now = sma2_series[-1] - sma3_series[-1]
+    price_gap_prev = sma2_series[-2] - sma3_series[-2]
+    macd_gap_now = macd_series_vals[-1] - macd_signal_series[-1]
+    macd_gap_prev = macd_series_vals[-2] - macd_signal_series[-2]
+    stoch_gap_now = stoch_k_series[-1] - stoch_d_series[-1]
+    stoch_gap_prev = stoch_k_series[-2] - stoch_d_series[-2]
+
     bb_mid_series = sma_series(closes, POWS_BB_LENGTH)
     bb_std_series = rolling_stdev(closes, POWS_BB_LENGTH)
     bb_upper_series = [m + POWS_BB_STDDEV * s if not (math.isnan(m) or math.isnan(s)) else math.nan for m, s in zip(bb_mid_series, bb_std_series)]
@@ -1008,6 +1017,42 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     band_width_expansion = 0.0
     if not math.isnan(bw_now) and not math.isnan(prior_bw) and prior_bw > 0:
         band_width_expansion = (bw_now - prior_bw) / prior_bw
+
+    def _prox(gap: float, scale: float) -> float:
+        if math.isnan(gap) or scale <= 0:
+            return 0.0
+        return max(0.0, min(1.0, 1.0 - (abs(gap) / scale)))
+
+    def _toward_bull(now: float, prev: float) -> float:
+        if math.isnan(now) or math.isnan(prev):
+            return 0.0
+        return 1.0 if now >= prev else 0.0
+
+    def _toward_bear(now: float, prev: float) -> float:
+        if math.isnan(now) or math.isnan(prev):
+            return 0.0
+        return 1.0 if now <= prev else 0.0
+
+    pre3x_bull_score = (
+        2.0 * _prox(price_gap_now, max(0.05, close * 0.003))
+        + 2.0 * _prox(macd_gap_now, max(0.05, abs(macd_signal) * 0.75))
+        + 2.0 * _prox(stoch_gap_now, 8.0)
+        + _toward_bull(price_gap_now, price_gap_prev)
+        + _toward_bull(macd_gap_now, macd_gap_prev)
+        + _toward_bull(stoch_gap_now, stoch_gap_prev)
+        + (1.0 if band_width_expansion >= 0 else 0.0)
+        + (1.0 if close >= bb_mid else 0.0)
+    )
+    pre3x_bear_score = (
+        2.0 * _prox(price_gap_now, max(0.05, close * 0.003))
+        + 2.0 * _prox(macd_gap_now, max(0.05, abs(macd_signal) * 0.75))
+        + 2.0 * _prox(stoch_gap_now, 8.0)
+        + _toward_bear(price_gap_now, price_gap_prev)
+        + _toward_bear(macd_gap_now, macd_gap_prev)
+        + _toward_bear(stoch_gap_now, stoch_gap_prev)
+        + (1.0 if band_width_expansion >= 0 else 0.0)
+        + (1.0 if close <= bb_mid else 0.0)
+    )
 
     # Composite ranking: trend, liquidity, and moderate RSI preferred.
     trend_component = (close / sma20) + (sma20 / sma50)
@@ -1062,6 +1107,8 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         dual_bear_cross_gap=dual_bear_cross_gap,
         triple_cross_gap=triple_cross_gap,
         triple_bear_cross_gap=triple_bear_cross_gap,
+        pre3x_bull_score=pre3x_bull_score,
+        pre3x_bear_score=pre3x_bear_score,
         touched_outer_band_recent=touched_outer_band_recent,
         outer_touch_age=outer_touch_age,
         band_width_expansion=band_width_expansion,
@@ -1160,8 +1207,8 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
             and result.band_width_expansion >= args.min_band_expansion
         )
     elif bb_spread_watchlist:
-        bull_ok = bull_ok and bull_bb_spread_ok
-        bear_ok = bear_ok and bear_bb_spread_ok
+        bull_ok = bull_ok and (bull_bb_spread_ok or result.pre3x_bull_score >= 7.0)
+        bear_ok = bear_ok and (bear_bb_spread_ok or result.pre3x_bear_score >= 7.0)
 
     # Avoid extremely stretched end-of-move candles in either direction.
     bull_ok = bull_ok and not (result.close > result.bb_upper * 1.03)
