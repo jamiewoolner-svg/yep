@@ -153,6 +153,7 @@ def _strategy_args() -> SimpleNamespace:
         band_touch_lookback=8,
         min_band_expansion=0.03,
         require_daily_and_233=True,
+        require_hourly=True,
         intraday_interval_min=1,
         auto_fallback=True,
         no_skips=False,
@@ -172,6 +173,7 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     strict.bb_spread_watchlist = False
     strict.require_simultaneous_cross = False
     strict.require_daily_and_233 = True
+    strict.require_hourly = True
     strict.cross_lookback = min(strict.cross_lookback, 5)
     strict.band_touch_lookback = min(strict.band_touch_lookback, 8)
     strict.min_band_expansion = max(strict.min_band_expansion, 0.03)
@@ -180,6 +182,7 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     confirm = copy.deepcopy(strict)
     confirm.require_simultaneous_cross = False
     confirm.require_daily_and_233 = True
+    confirm.require_hourly = True
     confirm.require_band_liftoff = False
     confirm.bb_spread_watchlist = True
     confirm.cross_lookback = max(confirm.cross_lookback, 7)
@@ -197,9 +200,11 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     developing.min_band_expansion = min(developing.min_band_expansion, 0.0)
     developing.min_adx = min(developing.min_adx, 6.0)
     developing.require_daily_and_233 = True
+    developing.require_hourly = True
 
     watchlist = copy.deepcopy(developing)
     watchlist.require_daily_and_233 = False
+    watchlist.require_hourly = False
     watchlist.require_macd_stoch_cross = False
     watchlist.require_band_liftoff = False
     watchlist.bb_spread_watchlist = True
@@ -222,13 +227,23 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                 return None
             if not passes_filters(daily, args):
                 return None
-            if args.require_daily_and_233:
+            if args.require_daily_and_233 or getattr(args, "require_hourly", False):
                 intraday = fetch_intraday(symbol, interval_min=args.intraday_interval_min)
-                c233 = resample_to_minutes(intraday, target_minutes=233)
-                tf233 = analyze_candles(symbol, c233, "233m")
-                if not tf233:
-                    return None
-                if not passes_secondary_timeframe_filters(tf233, args):
+                secondary_pass = False
+
+                if args.require_daily_and_233:
+                    c233 = resample_to_minutes(intraday, target_minutes=233)
+                    tf233 = analyze_candles(symbol, c233, "233m")
+                    if tf233 and passes_secondary_timeframe_filters(tf233, args):
+                        secondary_pass = True
+
+                if getattr(args, "require_hourly", False):
+                    c60 = resample_to_minutes(intraday, target_minutes=60)
+                    tf60 = analyze_candles(symbol, c60, "60m")
+                    if tf60 and passes_secondary_timeframe_filters(tf60, args):
+                        secondary_pass = True
+
+                if not secondary_pass:
                     return None
             return daily
         except RuntimeError:
