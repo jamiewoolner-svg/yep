@@ -39,6 +39,17 @@ POWS_BB_STDDEV = 2.0
 POWS_SMA_FAST = 50
 POWS_SMA_MID = 89
 POWS_SMA_SLOW = 200
+POWS_RSI_LENGTH = 13
+POWS_STOCH_PERIOD = 21
+POWS_STOCH_SMOOTH_K = 3
+POWS_STOCH_SMOOTH_D = 5
+POWS_MACD_FAST = 8
+POWS_MACD_SLOW = 21
+POWS_MACD_SIGNAL = 5
+POWS_DMI_LENGTH = 5
+POWS_ADX_SMOOTHING = 13
+POWS_STOCH_OB = 80.0
+POWS_STOCH_OS = 20.0
 HISTORICAL_LOOKBACK_YEARS = 5
 
 DATA_SOURCE = os.getenv("SCANNER_DATA_SOURCE", "auto")
@@ -650,6 +661,9 @@ def fetch_stooq_intraday(symbol: str, interval_min: int = 5) -> List[Candle]:
     except urllib.error.URLError as exc:
         raise RuntimeError(f"failed to fetch intraday {symbol}: {exc}") from exc
 
+    if "Exceeded the daily hits limit" in raw:
+        raise RuntimeError(f"failed to fetch intraday {symbol}: stooq daily hit limit reached")
+
     rows = list(csv.DictReader(raw.splitlines()))
     candles: List[Candle] = []
     for row in rows:
@@ -676,6 +690,78 @@ def fetch_stooq_intraday(symbol: str, interval_min: int = 5) -> List[Candle]:
             continue
 
     candles.sort(key=lambda c: c.date)
+    if not candles:
+        raise RuntimeError(f"failed to fetch intraday {symbol}: empty stooq dataset")
+    return candles
+
+
+def fetch_yahoo_intraday(symbol: str, interval_min: int = 1) -> List[Candle]:
+    yahoo_symbol = symbol.replace(".", "-")
+    interval = f"{max(1, int(interval_min))}m"
+    supported = {"1m", "2m", "5m", "15m", "30m", "60m"}
+    if interval not in supported:
+        interval = "1m"
+    range_value = "7d" if interval == "1m" else "60d"
+    query = urllib.parse.urlencode(
+        {
+            "range": range_value,
+            "interval": interval,
+            "includePrePost": "false",
+            "events": "div,splits",
+        }
+    )
+    url = f"{YAHOO_CHART_URL}/{urllib.parse.quote(yahoo_symbol)}?{query}"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (StockScannerCLI/1.0)"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"failed to fetch intraday {symbol} from yahoo: {exc}") from exc
+
+    try:
+        payload = json.loads(raw)
+        result = (payload.get("chart", {}).get("result") or [None])[0] or {}
+        timestamps = result.get("timestamp") or []
+        quote = ((result.get("indicators") or {}).get("quote") or [None])[0] or {}
+        opens = quote.get("open") or []
+        highs = quote.get("high") or []
+        lows = quote.get("low") or []
+        closes = quote.get("close") or []
+        volumes = quote.get("volume") or []
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise RuntimeError(f"failed to parse yahoo intraday for {symbol}: {exc}") from exc
+
+    candles: List[Candle] = []
+    for i, ts in enumerate(timestamps):
+        if i >= len(opens) or i >= len(highs) or i >= len(lows) or i >= len(closes):
+            continue
+        o = opens[i]
+        h = highs[i]
+        l = lows[i]
+        c = closes[i]
+        v = volumes[i] if i < len(volumes) else 0
+        if any(x is None for x in (o, h, l, c)) or c in (0, "0"):
+            continue
+        try:
+            candles.append(
+                Candle(
+                    date=datetime.utcfromtimestamp(int(ts)),
+                    open=float(o),
+                    high=float(h),
+                    low=float(l),
+                    close=float(c),
+                    volume=float(v or 0),
+                )
+            )
+        except (TypeError, ValueError, OSError):
+            continue
+
+    candles.sort(key=lambda c: c.date)
+    if not candles:
+        raise RuntimeError(f"failed to fetch intraday {symbol} from yahoo: empty dataset")
     return candles
 
 
@@ -684,14 +770,22 @@ def fetch_intraday(symbol: str, interval_min: int = 5) -> List[Candle]:
     if source == "polygon":
         return fetch_polygon_intraday(symbol, interval_min=interval_min)
     if source == "stooq":
-        return fetch_stooq_intraday(symbol, interval_min=interval_min)
+        try:
+            return fetch_stooq_intraday(symbol, interval_min=interval_min)
+        except RuntimeError:
+            return fetch_yahoo_intraday(symbol, interval_min=interval_min)
+    if source == "yahoo":
+        return fetch_yahoo_intraday(symbol, interval_min=interval_min)
 
     if POLYGON_API_KEY or os.getenv("POLYGON_API_KEY", ""):
         try:
             return fetch_polygon_intraday(symbol, interval_min=interval_min)
         except RuntimeError:
-            return fetch_stooq_intraday(symbol, interval_min=interval_min)
-    return fetch_stooq_intraday(symbol, interval_min=interval_min)
+            pass
+    try:
+        return fetch_stooq_intraday(symbol, interval_min=interval_min)
+    except RuntimeError:
+        return fetch_yahoo_intraday(symbol, interval_min=interval_min)
 
 
 def resample_to_minutes(candles: Sequence[Candle], target_minutes: int = 233) -> List[Candle]:
@@ -800,6 +894,15 @@ def rsi_series(values: Sequence[float], period: int = 14) -> List[float]:
             rs = avg_gain / avg_loss
             out[idx] = 100.0 - (100.0 / (1.0 + rs))
 
+    return out
+
+
+def shift_series(values: Sequence[float], offset: int) -> List[float]:
+    if offset <= 0:
+        return list(values)
+    out = [math.nan] * len(values)
+    for i in range(offset, len(values)):
+        out[i] = values[i - offset]
     return out
 
 
@@ -949,8 +1052,14 @@ def plot_symbol_with_crossings(symbol: str, days: int, output_path: str | None) 
     bb_upper = [m + POWS_BB_STDDEV * s if not (math.isnan(m) or math.isnan(s)) else math.nan for m, s in zip(bb_mid, bb_std)]
     bb_lower = [m - POWS_BB_STDDEV * s if not (math.isnan(m) or math.isnan(s)) else math.nan for m, s in zip(bb_mid, bb_std)]
 
-    stoch_k, stoch_d = stoch_rsi_series(closes, 14, 14, 3, 3)
-    macd_line, macd_signal = macd_series(closes, 12, 26, 9)
+    stoch_k, stoch_d = stoch_rsi_series(
+        closes,
+        POWS_RSI_LENGTH,
+        POWS_STOCH_PERIOD,
+        POWS_STOCH_SMOOTH_K,
+        POWS_STOCH_SMOOTH_D,
+    )
+    macd_line, macd_signal = macd_series(closes, POWS_MACD_FAST, POWS_MACD_SLOW, POWS_MACD_SIGNAL)
 
     sma_up, sma_down = find_crossings(sma50, sma89)
     macd_up, macd_down = find_crossings(macd_line, macd_signal)
@@ -980,8 +1089,8 @@ def plot_symbol_with_crossings(symbol: str, days: int, output_path: str | None) 
 
     ax_stoch.plot(dates, stoch_k, label="StochRSI %K", color="#e377c2", linewidth=1.2)
     ax_stoch.plot(dates, stoch_d, label="StochRSI %D", color="#8c564b", linewidth=1.2)
-    ax_stoch.axhline(80, color="red", linewidth=0.8, linestyle="--", alpha=0.5)
-    ax_stoch.axhline(20, color="green", linewidth=0.8, linestyle="--", alpha=0.5)
+    ax_stoch.axhline(POWS_STOCH_OB, color="red", linewidth=0.8, linestyle="--", alpha=0.5)
+    ax_stoch.axhline(POWS_STOCH_OS, color="green", linewidth=0.8, linestyle="--", alpha=0.5)
     ax_stoch.scatter([dates[i] for i in stoch_up], [stoch_k[i] for i in stoch_up], marker="^", color="green", s=28, label="%K up cross")
     ax_stoch.scatter([dates[i] for i in stoch_down], [stoch_k[i] for i in stoch_down], marker="v", color="red", s=28, label="%K down cross")
     ax_stoch.set_ylim(0, 100)
@@ -997,13 +1106,19 @@ def plot_symbol_with_crossings(symbol: str, days: int, output_path: str | None) 
     return 0
 
 
-def adx(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float], period: int = 14) -> tuple[float, float, float]:
-    if len(highs) < period + 2 or len(lows) != len(highs) or len(closes) != len(highs):
+def adx(
+    highs: Sequence[float],
+    lows: Sequence[float],
+    closes: Sequence[float],
+    dmi_length: int = 14,
+    adx_smoothing: int = 14,
+) -> tuple[float, float, float]:
+    if len(highs) < max(dmi_length, adx_smoothing) + 2 or len(lows) != len(highs) or len(closes) != len(highs):
         return math.nan, math.nan, math.nan
 
-    tr = []
-    plus_dm = []
-    minus_dm = []
+    tr: List[float] = []
+    plus_dm: List[float] = []
+    minus_dm: List[float] = []
     for i in range(1, len(highs)):
         high_diff = highs[i] - highs[i - 1]
         low_diff = lows[i - 1] - lows[i]
@@ -1018,31 +1133,36 @@ def adx(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float], 
         )
         tr.append(true_range)
 
-    if len(tr) < period * 2:
+    if len(tr) < dmi_length + adx_smoothing:
         return math.nan, math.nan, math.nan
 
-    plus_di_list = []
-    minus_di_list = []
-    dx_list = []
-    for i in range(period - 1, len(tr)):
-        tr_n = sum(tr[i - period + 1 : i + 1])
-        plus_n = sum(plus_dm[i - period + 1 : i + 1])
-        minus_n = sum(minus_dm[i - period + 1 : i + 1])
-        if tr_n == 0:
-            plus_di = 0.0
-            minus_di = 0.0
-        else:
-            plus_di = 100.0 * plus_n / tr_n
-            minus_di = 100.0 * minus_n / tr_n
+    plus_di_list: List[float] = []
+    minus_di_list: List[float] = []
+    dx_list: List[float] = []
+
+    tr_smooth = sum(tr[:dmi_length])
+    plus_smooth = sum(plus_dm[:dmi_length])
+    minus_smooth = sum(minus_dm[:dmi_length])
+
+    for i in range(dmi_length, len(tr)):
+        tr_smooth = tr_smooth - (tr_smooth / dmi_length) + tr[i]
+        plus_smooth = plus_smooth - (plus_smooth / dmi_length) + plus_dm[i]
+        minus_smooth = minus_smooth - (minus_smooth / dmi_length) + minus_dm[i]
+
+        plus_di = 0.0 if tr_smooth == 0 else (100.0 * plus_smooth / tr_smooth)
+        minus_di = 0.0 if tr_smooth == 0 else (100.0 * minus_smooth / tr_smooth)
         plus_di_list.append(plus_di)
         minus_di_list.append(minus_di)
         den = plus_di + minus_di
         dx_list.append(0.0 if den == 0 else (abs(plus_di - minus_di) / den) * 100.0)
 
-    if len(dx_list) < period:
+    if len(dx_list) < adx_smoothing:
         return math.nan, math.nan, math.nan
 
-    adx_value = avg(dx_list[-period:])
+    adx_value = avg(dx_list[:adx_smoothing])
+    for i in range(adx_smoothing, len(dx_list)):
+        adx_value = ((adx_value * (adx_smoothing - 1)) + dx_list[i]) / adx_smoothing
+
     return adx_value, plus_di_list[-1], minus_di_list[-1]
 
 
@@ -1140,15 +1260,27 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     bb_std = stdev(closes[-POWS_BB_LENGTH:])
     bb_upper = bb_mid + (POWS_BB_STDDEV * bb_std)
     bb_lower = bb_mid - (POWS_BB_STDDEV * bb_std)
-    rsi14 = rsi(closes, 14)
-    stoch_rsi_k, stoch_rsi_d = stoch_rsi(closes, 14, 14, 3, 3)
-    macd_line, macd_signal = macd(closes, 12, 26, 9)
-    sma2_series = sma_series(closes, 2)
-    sma3_series = sma_series(closes, 3)
-    stoch_k_series, stoch_d_series = stoch_rsi_series(closes, 14, 14, 3, 3)
-    macd_series_vals, macd_signal_series = macd_series(closes, 12, 26, 9)
+    rsi14 = rsi(closes, POWS_RSI_LENGTH)
+    stoch_rsi_k, stoch_rsi_d = stoch_rsi(
+        closes,
+        POWS_RSI_LENGTH,
+        POWS_STOCH_PERIOD,
+        POWS_STOCH_SMOOTH_K,
+        POWS_STOCH_SMOOTH_D,
+    )
+    macd_line, macd_signal = macd(closes, POWS_MACD_FAST, POWS_MACD_SLOW, POWS_MACD_SIGNAL)
+    sma2_series = shift_series(sma_series(closes, 2), 2)
+    sma3_series = shift_series(sma_series(closes, 3), 3)
+    stoch_k_series, stoch_d_series = stoch_rsi_series(
+        closes,
+        POWS_RSI_LENGTH,
+        POWS_STOCH_PERIOD,
+        POWS_STOCH_SMOOTH_K,
+        POWS_STOCH_SMOOTH_D,
+    )
+    macd_series_vals, macd_signal_series = macd_series(closes, POWS_MACD_FAST, POWS_MACD_SLOW, POWS_MACD_SIGNAL)
     price_up, price_down = find_crossings(sma2_series, sma3_series)
-    adx14, plus_di14, minus_di14 = adx(highs, lows, closes, 14)
+    adx14, plus_di14, minus_di14 = adx(highs, lows, closes, POWS_DMI_LENGTH, POWS_ADX_SMOOTHING)
     avg_volume20 = avg(volumes[-20:])
     dollar_volume20 = avg([(closes[i] * volumes[i]) for i in range(len(closes) - 20, len(closes))])
 
@@ -1432,8 +1564,13 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
             bear_ok = bear_ok and (result.close < result.sma50 < result.sma89 < result.sma200)
     if args.pows:
         # POWS context: trend bias without requiring perfect full-stack moving-average order.
-        bull_ok = bull_ok and (result.close > result.sma50 and result.sma50 >= result.sma89)
-        bear_ok = bear_ok and (result.close < result.sma50 and result.sma50 <= result.sma89)
+        if bb_spread_watchlist:
+            # Watchlist mode allows near-trend structures so early setups can surface.
+            bull_ok = bull_ok and (result.close >= result.sma50 * 0.985 and result.sma50 >= result.sma89 * 0.99)
+            bear_ok = bear_ok and (result.close <= result.sma50 * 1.015 and result.sma50 <= result.sma89 * 1.01)
+        else:
+            bull_ok = bull_ok and (result.close > result.sma50 and result.sma50 >= result.sma89)
+            bear_ok = bear_ok and (result.close < result.sma50 and result.sma50 <= result.sma89)
         # Course 3x language: accept either confirmed cross timing or strong pre-3x development.
         bull_confirmed = result.price_cross_age <= args.cross_lookback and result.triple_cross_gap <= 4
         bear_confirmed = result.price_bear_cross_age <= args.cross_lookback and result.triple_bear_cross_gap <= 4
@@ -1489,9 +1626,17 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
         bull_ok = bull_ok and (bull_bb_spread_ok or result.pre3x_bull_score >= 7.0)
         bear_ok = bear_ok and (bear_bb_spread_ok or result.pre3x_bear_score >= 7.0)
 
-    # Options swing viability floor: relax in watchlist/developing mode to surface early setups.
-    min_target_mid = 0.005 if (bb_spread_watchlist and not require_band_liftoff) else 0.01
-    min_setup_score = 24.0 if (bb_spread_watchlist and not require_macd_stoch_cross) else 35.0
+    # Options swing viability floor: progressively relax in watchlist mode.
+    if bb_spread_watchlist and not require_band_liftoff:
+        if require_macd_stoch_cross:
+            min_target_mid = 0.002
+            min_setup_score = 22.0
+        else:
+            min_target_mid = 0.0
+            min_setup_score = 12.0
+    else:
+        min_target_mid = 0.01
+        min_setup_score = 35.0
     bull_ok = bull_ok and (result.target_mid_pct >= min_target_mid and result.options_setup_score >= min_setup_score)
     bear_ok = bear_ok and (result.target_mid_pct >= min_target_mid and result.options_setup_score >= min_setup_score)
 

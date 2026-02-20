@@ -13,6 +13,10 @@ from flask import Flask, Response, render_template, render_template_string, requ
 from stock_scanner import (
     POWS_BB_LENGTH,
     POWS_BB_STDDEV,
+    POWS_MACD_FAST,
+    POWS_MACD_SIGNAL,
+    POWS_MACD_SLOW,
+    POWS_RSI_LENGTH,
     analyze_candles,
     analyze_symbol,
     configure_data_source,
@@ -133,8 +137,8 @@ def _pows_args() -> SimpleNamespace:
         min_price=5.0,
         max_price=1000.0,
         min_dollar_volume=2_000_000.0,
-        max_rsi=85.0,
-        max_stoch_rsi_k=95.0,
+        max_rsi=80.0,
+        max_stoch_rsi_k=80.0,
         min_adx=8.0,
         require_uptrend=False,
         require_breakout=False,
@@ -148,8 +152,8 @@ def _pows_args() -> SimpleNamespace:
         cross_lookback=6,
         band_touch_lookback=8,
         min_band_expansion=0.03,
-        require_daily_and_233=False,
-        intraday_interval_min=5,
+        require_daily_and_233=True,
+        intraday_interval_min=1,
         auto_fallback=True,
         no_skips=False,
         max_retries=4,
@@ -175,7 +179,7 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
 
     confirm = copy.deepcopy(strict)
     confirm.require_simultaneous_cross = False
-    confirm.require_daily_and_233 = False
+    confirm.require_daily_and_233 = True
     confirm.require_band_liftoff = False
     confirm.bb_spread_watchlist = True
     confirm.cross_lookback = max(confirm.cross_lookback, 7)
@@ -192,6 +196,7 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     developing.band_touch_lookback = max(developing.band_touch_lookback, 12)
     developing.min_band_expansion = min(developing.min_band_expansion, 0.0)
     developing.min_adx = min(developing.min_adx, 6.0)
+    developing.require_daily_and_233 = True
 
     return [("pows_strict", strict), ("pows_confirm", confirm), ("pows_developing", developing)]
 
@@ -241,8 +246,8 @@ def build_chart_payload(symbol: str, days: int) -> dict[str, Any]:
     bb_upper = [m + POWS_BB_STDDEV * s if not (math.isnan(m) or math.isnan(s)) else math.nan for m, s in zip(bb_mid, bb_std)]
     bb_lower = [m - POWS_BB_STDDEV * s if not (math.isnan(m) or math.isnan(s)) else math.nan for m, s in zip(bb_mid, bb_std)]
 
-    stoch_k, stoch_d = stoch_rsi_series(closes, 14, 14, 3, 3)
-    macd_line, macd_signal = macd_series(closes, 12, 26, 9)
+    stoch_k, stoch_d = stoch_rsi_series(closes, POWS_RSI_LENGTH, 21, 3, 5)
+    macd_line, macd_signal = macd_series(closes, POWS_MACD_FAST, POWS_MACD_SLOW, POWS_MACD_SIGNAL)
 
     sma_up, sma_down = find_crossings(sma50, sma89)
     macd_up, macd_down = find_crossings(macd_line, macd_signal)
