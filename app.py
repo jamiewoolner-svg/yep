@@ -1275,40 +1275,25 @@ def scan_stream() -> Response:
         ) + "\n"
 
         scanned_symbols: set[str] = set()
-        matched_symbols: set[str] = set()
         hard_failures: list[tuple[str, str]] = []
-        remaining_symbols = list(symbols)
+        def _run_pass(pass_label: str, pass_args: SimpleNamespace, pass_symbols: list[str]) -> None:
+            nonlocal found
+            if not pass_symbols:
+                return
+            yield_msg = {
+                "type": "status",
+                "message": f"{pass_label}: analyzing {len(pass_symbols)} symbols (candidates={found})",
+                "tier": "live",
+            }
+            yield json.dumps(yield_msg) + "\n"
 
-        for step in range(max_tune_steps):
-            if (time.time() - scan_start_ts) > max_scan_seconds:
-                yield json.dumps(
-                    {
-                        "type": "status",
-                        "message": f"Scan time budget reached ({max_scan_seconds}s). Returning current results.",
-                        "tier": "live",
-                    }
-                ) + "\n"
-                break
-            if not remaining_symbols:
-                break
-            tune_args = _tuned_args(step)
-            yield json.dumps(
-                {
-                    "type": "status",
-                    "message": (
-                        f"tune step {step + 1}/{max_tune_steps}: "
-                        f"remaining={len(remaining_symbols)} candidates={found}"
-                    ),
-                    "tier": "live",
-                }
-            ) + "\n"
-            pending_symbols = list(remaining_symbols)
+            pending_symbols = list(pass_symbols)
             retry_attempt = 0
             while pending_symbols:
                 if (time.time() - scan_start_ts) > max_scan_seconds:
-                    break
+                    return
                 with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                    future_map = {pool.submit(_analyze_for_args, sym, tune_args): sym for sym in pending_symbols}
+                    future_map = {pool.submit(_analyze_for_args, sym, pass_args): sym for sym in pending_symbols}
                     retry_symbols: list[str] = []
 
                     for fut in concurrent.futures.as_completed(future_map):
@@ -1333,8 +1318,6 @@ def scan_stream() -> Response:
 
                         if not analyzed:
                             continue
-                        if sym in matched_symbols:
-                            continue
 
                         if reference_pattern:
                             direct_similarity = _pattern_similarity(reference_pattern, analyzed)
@@ -1342,21 +1325,41 @@ def scan_stream() -> Response:
                             setattr(analyzed, "pattern_similarity", direct_similarity)
                             setattr(analyzed, "pattern_mode", str(getattr(analyzed, "setup_direction", "n/a")).upper())
 
-                        found += 1
-                        matched_symbols.add(sym)
                         row = _result_row(analyzed)
-                        candidate_rows[sym] = row
-                        yield json.dumps(
-                            {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "live"}
-                        ) + "\n"
+                        prev = candidate_rows.get(sym)
+                        if prev is None:
+                            found += 1
+                            candidate_rows[sym] = row
+                        elif float(row.get("rank_score", 0.0)) > float(prev.get("rank_score", 0.0)):
+                            candidate_rows[sym] = row
 
                 if retry_symbols:
                     retry_attempt += 1
                     yield json.dumps(
-                        {"type": "status", "message": f"live: retrying {len(retry_symbols)} symbol(s), attempt {retry_attempt}/{max_retries}"}
+                        {
+                            "type": "status",
+                            "message": f"{pass_label}: retrying {len(retry_symbols)} symbol(s), attempt {retry_attempt}/{max_retries}",
+                        }
                     ) + "\n"
                 pending_symbols = retry_symbols
-            remaining_symbols = [s for s in remaining_symbols if s not in matched_symbols]
+
+        # Pass 1 (fast): full-universe scan once.
+        yield from _run_pass("pass 1/2", _tuned_args(0), list(symbols))
+
+        # Pass 2 (optional): relaxed pass only for symbols not matched in pass 1.
+        if len(candidate_rows) < output_limit and max_tune_steps > 1 and (time.time() - scan_start_ts) <= max_scan_seconds:
+            remaining_symbols = [s for s in symbols if s not in candidate_rows]
+            relaxed_step = min(2, max_tune_steps - 1)
+            yield from _run_pass("pass 2/2", _tuned_args(relaxed_step), remaining_symbols)
+
+        if (time.time() - scan_start_ts) > max_scan_seconds:
+            yield json.dumps(
+                {
+                    "type": "status",
+                    "message": f"Scan time budget reached ({max_scan_seconds}s). Returning best current setups.",
+                    "tier": "live",
+                }
+            ) + "\n"
 
         if hard_failures and base_args.no_skips:
             first = hard_failures[0]
