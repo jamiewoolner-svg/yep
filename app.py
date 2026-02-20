@@ -56,6 +56,8 @@ YAHOO_QUOTE_SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSum
 EVENT_LOOKAHEAD_DAYS = int(os.getenv("EVENT_LOOKAHEAD_DAYS", "120"))
 EVENT_CACHE_TTL_SEC = int(os.getenv("EVENT_CACHE_TTL_SEC", "1800"))
 EVENT_BLOCK_DAYS = int(os.getenv("EVENT_BLOCK_DAYS", "7"))
+EVENT_HTTP_TIMEOUT_SEC = max(2, int(os.getenv("EVENT_HTTP_TIMEOUT_SEC", "4")))
+FED_MONTH_PAGE_LIMIT = max(1, int(os.getenv("FED_MONTH_PAGE_LIMIT", "6")))
 PATTERN_REF_SYMBOL_DEFAULT = str(os.getenv("PATTERN_REF_SYMBOL", "GOOGL")).strip().upper() or "GOOGL"
 PATTERN_REF_WEIGHT = float(os.getenv("PATTERN_REF_WEIGHT", "1000"))
 _EVENT_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
@@ -65,7 +67,7 @@ _CHART_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CHART_CACHE_LOCK = threading.Lock()
 
 
-def _http_get_text(url: str, timeout: int = 10) -> str:
+def _http_get_text(url: str, timeout: int = EVENT_HTTP_TIMEOUT_SEC) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (YEPSTOCKS/1.0)"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode("utf-8", errors="replace")
@@ -168,7 +170,7 @@ def _fetch_fed_events(days_ahead: int = EVENT_LOOKAHEAD_DAYS) -> list[dict[str, 
     try:
         root_html = _http_get_text(FED_WHATS_NEXT_URL, timeout=8)
         links = re.findall(r'href="(/newsevents/20\d{2}[-/][a-z0-9]+\.htm)"', root_html, flags=re.I)
-        month_links = sorted({urllib.parse.urljoin(FED_CALENDAR_ROOT, p) for p in links})
+        month_links = sorted({urllib.parse.urljoin(FED_CALENDAR_ROOT, p) for p in links})[-FED_MONTH_PAGE_LIMIT:]
         for url in month_links:
             page = _http_get_text(url, timeout=8)
             if "FOMC Meetings" not in page:
@@ -1129,9 +1131,20 @@ def calendar_events() -> Response:
     symbols = [s for s in dict.fromkeys([x.strip() for x in raw_symbols.split(",") if x.strip()]) if re.fullmatch(r"[A-Z]{1,5}", s)]
     symbols = symbols[:40]
 
-    events = _fetch_fed_events(days) + _fetch_labor_events(days)
+    events: list[dict[str, Any]] = []
+    try:
+        events.extend(_fetch_fed_events(days))
+    except Exception:
+        pass
+    try:
+        events.extend(_fetch_labor_events(days))
+    except Exception:
+        pass
     for sym in symbols:
-        events.extend(_fetch_symbol_earnings_event(sym, days))
+        try:
+            events.extend(_fetch_symbol_earnings_event(sym, days))
+        except Exception:
+            continue
 
     uniq: dict[tuple[str, str], dict[str, Any]] = {}
     for event in events:
