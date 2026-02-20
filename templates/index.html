@@ -246,6 +246,19 @@
     const modelBySymbol = new Map();
     let chartQueue = [];
     let chartWorkerActive = false;
+    let chartObserver = null;
+
+    if ('IntersectionObserver' in window) {
+      chartObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const symbol = String(entry.target.dataset.symbol || '').trim();
+          const model = modelBySymbol.get(symbol);
+          if (model) queueChart(model);
+          chartObserver.unobserve(entry.target);
+        }
+      }, { rootMargin: '420px 0px' });
+    }
 
     function pickRecent(idx, series, maxPoints = 4) {
       const start = Math.max(0, idx.length - maxPoints);
@@ -322,6 +335,7 @@
       const id = `signal-${symbol}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
       const card = document.createElement('article');
       card.className = 'signal-card';
+      card.dataset.symbol = symbol;
       const model = {
         id,
         symbol,
@@ -339,6 +353,11 @@
         model.tf = tfSel.value;
         drawChart(model);
       });
+      if (chartObserver) {
+        chartObserver.observe(card);
+      } else {
+        queueChart(model);
+      }
       return model;
     }
 
@@ -553,7 +572,6 @@
         models.push(model);
         modelBySymbol.set(symbol, model);
         insertCardSorted(model);
-        queueChart(model);
         status.textContent = `Match: ${symbol}`;
         return;
       }
@@ -581,6 +599,7 @@
       modelBySymbol.clear();
       chartQueue = [];
       chartWorkerActive = false;
+      if (chartObserver) chartObserver.disconnect();
 
       status.textContent = 'Starting scan...';
       tierEl.textContent = 'Tier: init';
