@@ -1604,17 +1604,15 @@ def _passes_directional_setup(
     spread_floor = max(0.0, args.min_band_expansion)
     bull_bb_spread_ok = (
         result.band_width_expansion >= spread_floor
-        and (
-            (result.touched_outer_band_recent and result.outer_touch_age <= args.band_touch_lookback + 2)
-            or (result.close >= result.bb_mid and result.macd >= result.macd_signal and result.stoch_rsi_k >= result.stoch_rsi_d)
-        )
+        and result.touched_outer_band_recent
+        and result.outer_touch_age <= args.band_touch_lookback
+        and result.close >= result.bb_mid
     )
     bear_bb_spread_ok = (
         result.band_width_expansion >= spread_floor
-        and (
-            (result.touched_outer_band_recent and result.outer_touch_age <= args.band_touch_lookback + 2)
-            or (result.close <= result.bb_mid and result.macd <= result.macd_signal and result.stoch_rsi_k <= result.stoch_rsi_d)
-        )
+        and result.touched_outer_band_recent
+        and result.outer_touch_age <= args.band_touch_lookback
+        and result.close <= result.bb_mid
     )
 
     if require_band_liftoff:

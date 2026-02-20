@@ -205,6 +205,8 @@
     const scannedEl = document.getElementById('m-scanned');
     const matchesEl = document.getElementById('m-matches');
     let activeController = null;
+    let isScanning = false;
+    let sortQueued = false;
     const chartModels = [];
 
     function pick(idx, series) { return idx.map(i => series[i]); }
@@ -218,17 +220,25 @@
       return idx.slice(start);
     }
 
+    function num(v, fallback = 0) {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : fallback;
+    }
+
     function sortResultRows() {
       const rows = Array.from(resultsBody.querySelectorAll('tr'));
       rows.sort((a, b) => {
-        const aScore = Number(a.dataset.rank || 0);
-        const bScore = Number(b.dataset.rank || 0);
+        const aScore = num(a.dataset.rank, 0);
+        const bScore = num(b.dataset.rank, 0);
         if (bScore !== aScore) return bScore - aScore;
-        const aPre3x = Number(a.dataset.pre3x || 0);
-        const bPre3x = Number(b.dataset.pre3x || 0);
+        const aBb = num(a.dataset.bbexp, 0);
+        const bBb = num(b.dataset.bbexp, 0);
+        if (bBb !== aBb) return bBb - aBb;
+        const aPre3x = num(a.dataset.pre3x, 0);
+        const bPre3x = num(b.dataset.pre3x, 0);
         if (bPre3x !== aPre3x) return bPre3x - aPre3x;
-        const aHistWr = Number(a.dataset.histwr || 0);
-        const bHistWr = Number(b.dataset.histwr || 0);
+        const aHistWr = num(a.dataset.histwr, 0);
+        const bHistWr = num(b.dataset.histwr, 0);
         if (bHistWr !== aHistWr) return bHistWr - aHistWr;
         const aSym = String(a.dataset.symbol || '');
         const bSym = String(b.dataset.symbol || '');
@@ -237,7 +247,20 @@
       for (const r of rows) resultsBody.appendChild(r);
     }
 
+    function queueSortResultRows() {
+      if (sortQueued) return;
+      sortQueued = true;
+      requestAnimationFrame(() => {
+        sortQueued = false;
+        sortResultRows();
+      });
+    }
+
     async function loadChartForSymbol(symbol, tier) {
+      if (isScanning) {
+        status.textContent = 'Scan is running. Click charts after scan completes to keep streaming fast.';
+        return;
+      }
       const existing = chartModels.find(m => (m.chart?.symbol || '') === symbol);
       if (existing) {
         return;
@@ -255,7 +278,7 @@
           return;
         }
         chartModels.push({chart: payload, tier: tier || 'ranked', tf: '1D'});
-        renderCharts();
+        addChart(chartModels[chartModels.length - 1]);
         status.textContent = `Loaded chart: ${symbol}`;
       } catch (err) {
         status.textContent = `Chart load failed for ${symbol}: ${err}`;
@@ -264,9 +287,17 @@
 
     function addRow(row, tier) {
       const tr = document.createElement('tr');
-      tr.dataset.rank = String(row.rank_score || 0);
-      tr.dataset.pre3x = String(row.raw_pre3x || row.pre3x || 0);
-      tr.dataset.histwr = String((row.raw_hist_wr || 0) * 100.0 || row.hist_wr || 0);
+      const computedRank = (
+        (num(row.raw_setup_score, num(row.setup_score, 0)) * 1000.0) +
+        (num(row.raw_score, num(row.score, 0)) * 10.0) +
+        (num(row.raw_pre3x, num(row.pre3x, 0)) * 2.0) +
+        (num(row.raw_hist_wr, num(row.hist_wr, 0) / 100.0) * 100.0) +
+        (Math.max(0, num(row.raw_bb_expansion, num(row.bb_expansion, 0))) * 300.0)
+      );
+      tr.dataset.rank = String(num(row.rank_score, computedRank));
+      tr.dataset.pre3x = String(num(row.raw_pre3x, num(row.pre3x, 0)));
+      tr.dataset.histwr = String(num(row.raw_hist_wr, num(row.hist_wr, 0) / 100.0) * 100.0);
+      tr.dataset.bbexp = String(num(row.raw_bb_expansion, num(row.bb_expansion, 0)));
       tr.dataset.symbol = String(row.symbol || '');
       tr.dataset.tier = String(tier || 'ranked');
       tr.innerHTML = `
@@ -298,7 +329,7 @@
       tr.title = 'Click to load chart';
       tr.addEventListener('click', () => loadChartForSymbol(row.symbol, tier));
       resultsBody.appendChild(tr);
-      sortResultRows();
+      queueSortResultRows();
     }
 
     function renderCharts() {
@@ -321,7 +352,7 @@
       const tf = model.tf || '1D';
       const chartBundle = model.chart;
       const rawView = chartBundle.timeframes[tf] || chartBundle.timeframes['1D'] || Object.values(chartBundle.timeframes)[0];
-      const trimByTf = { '1D': 320, '233m': 260, '55m': 340, '34m': 380, '21m': 420, '13m': 500, '8m': 620, '5m': 760 };
+      const trimByTf = { '1D': 320, '233m': 220, '55m': 200, '34m': 180, '21m': 160, '13m': 140, '8m': 120, '5m': 100 };
       const keep = trimByTf[tf] || 320;
       const start = Math.max(0, (rawView?.dates?.length || 0) - keep);
       const view = {
@@ -351,11 +382,12 @@
 
       const x = view.dates;
       const intraday = String(view.timeframe || '').endsWith('m');
+      const tinyTf = ['34m', '21m', '13m', '8m', '5m'].includes(tf);
       const eventLineColor = {high: '#f26d6d', medium: '#f2bf5a', low: '#6da7f2'};
       const eventShapes = [];
       const eventAnnotations = [];
-      const events = (view.events || []).slice(-8);
-      const annotatedEvents = events.slice(-3);
+      const events = intraday ? [] : (view.events || []).slice(-8);
+      const annotatedEvents = intraday ? [] : events.slice(-3);
       for (const ev of events) {
         const c = eventLineColor[ev.severity] || '#f2bf5a';
         eventShapes.push({
@@ -403,19 +435,19 @@
         {x, y: view.sma200, name: 'SMA200', line: {color: '#9467bd'}, xaxis: 'x', yaxis: 'y'},
         {x, y: view.bb_upper, name: 'BB Upper', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
         {x, y: view.bb_lower, name: 'BB Lower', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
-        {x: pickRecent(view.sma_cross_up_idx, x), y: pickRecent(view.sma_cross_up_idx, view.close), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 8}, name: 'SMA Up', xaxis: 'x', yaxis: 'y'},
-        {x: pickRecent(view.sma_cross_down_idx, x), y: pickRecent(view.sma_cross_down_idx, view.close), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 8}, name: 'SMA Down', xaxis: 'x', yaxis: 'y'},
+        {x: tinyTf ? [] : pickRecent(view.sma_cross_up_idx, x), y: tinyTf ? [] : pickRecent(view.sma_cross_up_idx, view.close), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 8}, name: 'SMA Up', xaxis: 'x', yaxis: 'y'},
+        {x: tinyTf ? [] : pickRecent(view.sma_cross_down_idx, x), y: tinyTf ? [] : pickRecent(view.sma_cross_down_idx, view.close), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 8}, name: 'SMA Down', xaxis: 'x', yaxis: 'y'},
         {x, y: view.macd, name: 'MACD', line: {color: '#17becf'}, xaxis: 'x2', yaxis: 'y2'},
         {x, y: view.macd_signal, name: 'Signal', line: {color: '#bcbd22'}, xaxis: 'x2', yaxis: 'y2'},
-        {x: pickRecent(view.macd_cross_up_idx, x), y: pickRecent(view.macd_cross_up_idx, view.macd), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'MACD Up', xaxis: 'x2', yaxis: 'y2'},
-        {x: pickRecent(view.macd_cross_down_idx, x), y: pickRecent(view.macd_cross_down_idx, view.macd), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'MACD Down', xaxis: 'x2', yaxis: 'y2'},
+        {x: tinyTf ? [] : pickRecent(view.macd_cross_up_idx, x), y: tinyTf ? [] : pickRecent(view.macd_cross_up_idx, view.macd), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'MACD Up', xaxis: 'x2', yaxis: 'y2'},
+        {x: tinyTf ? [] : pickRecent(view.macd_cross_down_idx, x), y: tinyTf ? [] : pickRecent(view.macd_cross_down_idx, view.macd), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'MACD Down', xaxis: 'x2', yaxis: 'y2'},
         {x, y: view.stoch_k, name: 'Stoch %K', line: {color: '#e377c2'}, xaxis: 'x3', yaxis: 'y3'},
         {x, y: view.stoch_d, name: 'Stoch %D', line: {color: '#8c564b'}, xaxis: 'x3', yaxis: 'y3'},
-        {x: pickRecent(view.stoch_cross_up_idx, x), y: pickRecent(view.stoch_cross_up_idx, view.stoch_k), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'Stoch Up', xaxis: 'x3', yaxis: 'y3'},
-        {x: pickRecent(view.stoch_cross_down_idx, x), y: pickRecent(view.stoch_cross_down_idx, view.stoch_k), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'Stoch Down', xaxis: 'x3', yaxis: 'y3'}
+        {x: tinyTf ? [] : pickRecent(view.stoch_cross_up_idx, x), y: tinyTf ? [] : pickRecent(view.stoch_cross_up_idx, view.stoch_k), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'Stoch Up', xaxis: 'x3', yaxis: 'y3'},
+        {x: tinyTf ? [] : pickRecent(view.stoch_cross_down_idx, x), y: tinyTf ? [] : pickRecent(view.stoch_cross_down_idx, view.stoch_k), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'Stoch Down', xaxis: 'x3', yaxis: 'y3'}
       ];
 
-      Plotly.newPlot(plotId, traces, {
+      Plotly.react(plotId, traces, {
         margin: {l: 50, r: 20, t: 20, b: 30},
         paper_bgcolor: '#132230',
         plot_bgcolor: '#132230',
@@ -465,7 +497,7 @@
           drawChart(model, id);
         });
       }
-      drawChart(model, id);
+      requestAnimationFrame(() => drawChart(model, id));
     }
 
     async function handleMessage(msg) {
@@ -478,6 +510,7 @@
       } else if (msg.type === 'error') {
         status.textContent = `Error: ${msg.message}`;
       } else if (msg.type === 'done') {
+        sortResultRows();
         status.textContent = `Done. ${msg.count} match(es), tier: ${msg.tier}`;
       } else if (msg.type === 'metrics') {
         tierEl.textContent = `Tier: ${msg.tier}`;
@@ -491,6 +524,7 @@
       resultsBody.innerHTML = '';
       charts.innerHTML = '';
       chartModels.length = 0;
+      isScanning = true;
       emptyNote.style.display = 'block';
       status.textContent = 'Starting scan...';
       tierEl.textContent = 'Tier: init';
@@ -545,6 +579,7 @@
           status.textContent = `Error: ${err}`;
         }
       } finally {
+        isScanning = false;
         scanBtn.disabled = false;
         activeController = null;
       }

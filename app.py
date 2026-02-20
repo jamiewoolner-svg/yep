@@ -583,7 +583,8 @@ def _ranked_scan_args() -> SimpleNamespace:
     args.max_rsi = max(args.max_rsi, 95.0)
     args.max_stoch_rsi_k = max(args.max_stoch_rsi_k, 95.0)
     args.min_dollar_volume = min(args.min_dollar_volume, 1_000_000.0)
-    args.min_band_expansion = max(args.min_band_expansion, 0.05)
+    args.min_band_expansion = max(args.min_band_expansion, 0.08)
+    args.band_touch_lookback = min(args.band_touch_lookback, 3)
     return args
 
 
