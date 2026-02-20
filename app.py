@@ -447,6 +447,7 @@ def _strategy_args() -> SimpleNamespace:
         bb_spread_watchlist=True,
         signal_direction="both",
         cross_lookback=6,
+        triple_gap_max=6,
         band_touch_lookback=8,
         min_band_expansion=0.03,
         require_daily_and_233=True,
@@ -476,6 +477,7 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     strict.require_weekly_context = True
     strict.require_precision_entry = True
     strict.cross_lookback = min(strict.cross_lookback, 5)
+    strict.triple_gap_max = 4
     strict.band_touch_lookback = min(strict.band_touch_lookback, 8)
     strict.min_band_expansion = max(strict.min_band_expansion, 0.03)
     strict.min_adx = max(strict.min_adx, 10.0)
@@ -489,6 +491,7 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     confirm.require_band_liftoff = False
     confirm.bb_spread_watchlist = True
     confirm.cross_lookback = max(confirm.cross_lookback, 7)
+    confirm.triple_gap_max = 6
     confirm.band_touch_lookback = max(confirm.band_touch_lookback, 10)
     confirm.min_band_expansion = min(confirm.min_band_expansion, 0.01)
     confirm.min_adx = min(confirm.min_adx, 8.0)
@@ -499,6 +502,7 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     developing.require_band_liftoff = False
     developing.bb_spread_watchlist = True
     developing.cross_lookback = max(developing.cross_lookback, 10)
+    developing.triple_gap_max = 8
     developing.band_touch_lookback = max(developing.band_touch_lookback, 12)
     developing.min_band_expansion = min(developing.min_band_expansion, 0.0)
     developing.min_adx = min(developing.min_adx, 6.0)
@@ -516,13 +520,48 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     watchlist.require_band_liftoff = False
     watchlist.bb_spread_watchlist = True
     watchlist.cross_lookback = max(watchlist.cross_lookback, 12)
+    watchlist.triple_gap_max = 10
     watchlist.band_touch_lookback = max(watchlist.band_touch_lookback, 14)
     watchlist.min_band_expansion = min(watchlist.min_band_expansion, -0.02)
     watchlist.min_adx = min(watchlist.min_adx, 4.0)
     watchlist.max_rsi = max(watchlist.max_rsi, 90.0)
     watchlist.max_stoch_rsi_k = max(watchlist.max_stoch_rsi_k, 95.0)
 
-    return [("strict", strict), ("confirm", confirm), ("developing", developing), ("watchlist", watchlist)]
+    broad = copy.deepcopy(watchlist)
+    broad.require_daily_and_233 = False
+    broad.require_hourly = False
+    broad.require_weekly_context = False
+    broad.require_precision_entry = False
+    broad.require_macd_stoch_cross = False
+    broad.require_band_liftoff = False
+    broad.bb_spread_watchlist = True
+    broad.cross_lookback = max(broad.cross_lookback, 14)
+    broad.triple_gap_max = 12
+    broad.min_adx = min(broad.min_adx, 3.0)
+    broad.min_dollar_volume = min(broad.min_dollar_volume, 1_000_000.0)
+    broad.max_rsi = max(broad.max_rsi, 95.0)
+    broad.max_stoch_rsi_k = max(broad.max_stoch_rsi_k, 95.0)
+
+    return [("strict", strict), ("confirm", confirm), ("developing", developing), ("watchlist", watchlist), ("broad_3x", broad)]
+
+
+def _ranked_scan_args() -> SimpleNamespace:
+    """Single-pass ranked scan over all symbols with broad-but-rule-based filtering."""
+    args = _strategy_args()
+    args.require_macd_stoch_cross = False
+    args.require_band_liftoff = False
+    args.bb_spread_watchlist = True
+    args.require_daily_and_233 = False
+    args.require_hourly = False
+    args.require_weekly_context = False
+    args.require_precision_entry = False
+    args.cross_lookback = max(args.cross_lookback, 14)
+    args.triple_gap_max = 12
+    args.min_adx = min(args.min_adx, 3.0)
+    args.max_rsi = max(args.max_rsi, 95.0)
+    args.max_stoch_rsi_k = max(args.max_stoch_rsi_k, 95.0)
+    args.min_dollar_volume = min(args.min_dollar_volume, 1_000_000.0)
+    return args
 
 
 def _resample_daily_to_weekly(candles: list[Candle]) -> list[Candle]:
@@ -572,25 +611,21 @@ def _weekly_context_ok(daily: Any, weekly: Any) -> bool:
     return bool(weekly.close >= weekly.sma50 and weekly.sma50 >= weekly.sma89)
 
 
-def _has_triple_cross(result: Any, lookback: int) -> bool:
+def _has_triple_cross(result: Any, lookback: int, gap_max: int) -> bool:
     direction = str(getattr(result, "setup_direction", "bull")).lower()
     if direction == "bear":
         return bool(
             result.price_bear_cross_age <= lookback
             and result.macd_bear_cross_age <= lookback
             and result.stoch_bear_cross_age <= lookback
-            and result.triple_bear_cross_gap <= 4
+            and result.triple_bear_cross_gap <= gap_max
         )
     return bool(
         result.price_cross_age <= lookback
         and result.macd_cross_age <= lookback
         and result.stoch_cross_age <= lookback
-        and result.triple_cross_gap <= 4
+        and result.triple_cross_gap <= gap_max
     )
-
-
-def _same_direction(lhs: Any, rhs: Any) -> bool:
-    return str(getattr(lhs, "setup_direction", "")).lower() == str(getattr(rhs, "setup_direction", "")).lower()
 
 
 def _precision_entry_ok(intraday: list[Candle], daily: Any, args: SimpleNamespace) -> bool:
@@ -624,7 +659,11 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
             if not passes_filters(daily, args):
                 return None
             lookback = max(4, int(getattr(args, "cross_lookback", 6)))
-            daily_has_3x = _has_triple_cross(daily, lookback)
+            gap_max = max(2, int(getattr(args, "triple_gap_max", 4)))
+            daily_has_3x = _has_triple_cross(daily, lookback, gap_max)
+            tf233_has_3x = False
+            tf55_has_3x = False
+            tf34_has_3x = False
 
             daily_candles = fetch_history(symbol)
 
@@ -645,9 +684,7 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                     if tf60 and passes_secondary_timeframe_filters(tf60, args):
                         secondary_pass = True
 
-                tf233_has_3x = bool(tf233 and _has_triple_cross(tf233, lookback))
-                tf55_has_3x = False
-                tf34_has_3x = False
+                tf233_has_3x = bool(tf233 and _has_triple_cross(tf233, lookback, gap_max))
 
                 # Only compute 55/34 if daily/233 didn't already satisfy the 3x gate.
                 if not (daily_has_3x or tf233_has_3x):
@@ -655,12 +692,9 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                     tf55 = analyze_candles(symbol, c55, "55m")
                     c34 = resample_to_minutes(intraday, target_minutes=34)
                     tf34 = analyze_candles(symbol, c34, "34m")
-                    tf55_has_3x = bool(tf55 and _has_triple_cross(tf55, lookback) and _same_direction(tf55, daily))
-                    tf34_has_3x = bool(tf34 and _has_triple_cross(tf34, lookback) and _same_direction(tf34, daily))
-
-                # Hard book rule: if there is no 3x, skip this stock.
-                if not (daily_has_3x or tf233_has_3x or tf55_has_3x or tf34_has_3x):
-                    return None
+                    # Allow both with-trend and counter-trend 55/34 candidates; ranking handles quality.
+                    tf55_has_3x = bool(tf55 and _has_triple_cross(tf55, lookback, gap_max))
+                    tf34_has_3x = bool(tf34 and _has_triple_cross(tf34, lookback, gap_max))
 
                 # Timeframe-to-trend mapping from the course:
                 # 3x on daily/233 => confirm trend with weekly.
@@ -678,6 +712,10 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                 if getattr(args, "require_precision_entry", False):
                     if not _precision_entry_ok(intraday, daily, args):
                         return None
+
+            # Hard book rule: if there is no 3x, skip this stock.
+            if not (daily_has_3x or tf233_has_3x or tf55_has_3x or tf34_has_3x):
+                return None
             return daily
         except RuntimeError:
             if attempt >= retries:
@@ -739,81 +777,74 @@ def scan_stream() -> Response:
         payload = json.dumps({"type": "error", "message": str(exc)})
         return Response(payload + "\n", mimetype="application/x-ndjson")
 
-    base_args = _strategy_args()
+    base_args = _ranked_scan_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = max(0, int(base_args.max_retries))
-    tiers = _strict_fallback_tiers(base_args) if base_args.auto_fallback else [("strict", base_args)]
 
     @stream_with_context
     def _generate() -> Any:
         found = 0
         total_symbols = len(symbols)
         yield json.dumps({"type": "status", "message": f"Universe size: {total_symbols} symbols"}) + "\n"
-        yield json.dumps({"type": "metrics", "scanned": 0, "matches": 0, "total": total_symbols, "tier": "init"}) + "\n"
-        for tier_name, tier_args in tiers:
-            yield json.dumps({"type": "status", "message": f"Scanning tier: {tier_name}", "tier": tier_name}) + "\n"
-            tier_matches = 0
-            pending_symbols = list(symbols)
-            attempt = 0
-            scanned = 0
-            hard_failures: list[tuple[str, str]] = []
+        yield json.dumps({"type": "metrics", "scanned": 0, "matches": 0, "total": total_symbols, "tier": "ranked"}) + "\n"
+        yield json.dumps({"type": "status", "message": "Scanning ranked universe...", "tier": "ranked"}) + "\n"
 
-            while pending_symbols:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                    future_map = {pool.submit(_analyze_for_args, sym, tier_args): sym for sym in pending_symbols}
-                    retry_symbols: list[str] = []
+        pending_symbols = list(symbols)
+        attempt = 0
+        scanned = 0
+        hard_failures: list[tuple[str, str]] = []
 
-                    for fut in concurrent.futures.as_completed(future_map):
-                        sym = future_map[fut]
-                        scanned += 1
-                        yield json.dumps(
-                            {"type": "progress", "message": f"{tier_name}: {scanned}/{len(symbols)} analyzed ({sym})"}
-                        ) + "\n"
-                        yield json.dumps(
-                            {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": tier_name}
-                        ) + "\n"
+        while pending_symbols:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                future_map = {pool.submit(_analyze_for_args, sym, base_args): sym for sym in pending_symbols}
+                retry_symbols: list[str] = []
 
-                        try:
-                            analyzed = fut.result()
-                        except Exception as exc:
-                            if attempt < max_retries:
-                                retry_symbols.append(sym)
-                            else:
-                                hard_failures.append((sym, str(exc)))
-                            continue
-
-                        if not analyzed:
-                            continue
-                        tier_matches += 1
-                        found += 1
-                        row = _result_row(analyzed)
-                        chart = build_chart_payload(analyzed.symbol, plot_days)
-                        yield json.dumps({"type": "match", "tier": tier_name, "row": row, "chart": chart}) + "\n"
-                        yield json.dumps(
-                            {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": tier_name}
-                        ) + "\n"
-
-                if retry_symbols:
-                    attempt += 1
+                for fut in concurrent.futures.as_completed(future_map):
+                    sym = future_map[fut]
+                    scanned += 1
                     yield json.dumps(
-                        {"type": "status", "message": f"{tier_name}: retrying {len(retry_symbols)} symbol(s), attempt {attempt}/{max_retries}"}
+                        {"type": "progress", "message": f"ranked: {scanned}/{len(symbols)} analyzed ({sym})"}
                     ) + "\n"
-                pending_symbols = retry_symbols
+                    yield json.dumps(
+                        {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "ranked"}
+                    ) + "\n"
 
-            if hard_failures and base_args.no_skips:
-                first = hard_failures[0]
+                    try:
+                        analyzed = fut.result()
+                    except Exception as exc:
+                        if attempt < max_retries:
+                            retry_symbols.append(sym)
+                        else:
+                            hard_failures.append((sym, str(exc)))
+                        continue
+
+                    if not analyzed:
+                        continue
+
+                    found += 1
+                    row = _result_row(analyzed)
+                    chart = build_chart_payload(analyzed.symbol, plot_days)
+                    yield json.dumps({"type": "match", "tier": "ranked", "row": row, "chart": chart}) + "\n"
+                    yield json.dumps(
+                        {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "ranked"}
+                    ) + "\n"
+
+            if retry_symbols:
+                attempt += 1
                 yield json.dumps(
-                    {"type": "error", "message": f"No-skips mode failed. Could not fetch {len(hard_failures)} symbol(s). First: {first[0]} ({first[1]})"}
+                    {"type": "status", "message": f"ranked: retrying {len(retry_symbols)} symbol(s), attempt {attempt}/{max_retries}"}
                 ) + "\n"
-                yield json.dumps({"type": "done", "count": found, "tier": tier_name}) + "\n"
-                return
+            pending_symbols = retry_symbols
 
-            if tier_matches > 0:
-                yield json.dumps({"type": "done", "count": found, "tier": tier_name}) + "\n"
-                return
-            yield json.dumps({"type": "status", "message": f"No matches at {tier_name}, falling back."}) + "\n"
+        if hard_failures and base_args.no_skips:
+            first = hard_failures[0]
+            yield json.dumps(
+                {"type": "error", "message": f"No-skips mode failed. Could not fetch {len(hard_failures)} symbol(s). First: {first[0]} ({first[1]})"}
+            ) + "\n"
+            yield json.dumps({"type": "done", "count": found, "tier": "ranked"}) + "\n"
+            return
 
-        yield json.dumps({"type": "done", "count": found, "tier": "none"}) + "\n"
+        yield json.dumps({"type": "done", "count": found, "tier": "ranked"}) + "\n"
 
     return Response(_generate(), mimetype="application/x-ndjson")
 
