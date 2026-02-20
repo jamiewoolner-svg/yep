@@ -5,10 +5,12 @@ services:
     plan: starter
     region: oregon
     buildCommand: pip install -r requirements-web.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300
+    startCommand: /opt/render/project/src/.venv/bin/gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
       - key: POLYGON_MIN_GAP_SEC
         sync: false
       - key: SCANNER_DATA_SOURCE
