@@ -901,11 +901,6 @@ def index() -> str:
     return render_template("index.html", error=fallback_error, results=[], chart_payload=None, form_values={})
 
 
-@app.route("/healthz", methods=["GET"])
-def healthz() -> Response:
-    return Response("ok\n", mimetype="text/plain")
-
-
 @app.route("/scan_stream", methods=["POST"])
 def scan_stream() -> Response:
     workers = max(8, int(os.getenv("SCAN_WORKERS", "24")))
