@@ -4,7 +4,7 @@ services:
     runtime: python
     plan: starter
     buildCommand: pip install -r requirements-web.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300
+    startCommand: python3 -m gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300
     envVars:
       - key: POLYGON_API_KEY
         sync: false
