@@ -561,6 +561,8 @@ def _strategy_args() -> SimpleNamespace:
         min_band_ride_score=0.62,
         band_ride_lookback=8,
         require_band_widen_window=True,
+        recent_daily_bars=15,
+        recent_233_bars=15,
         min_target_band_pct=0.01,
         min_course_pattern_score=55.0,
         max_setup_age=3,
@@ -813,6 +815,22 @@ def _has_triple_cross(result: Any, lookback: int, gap_max: int) -> bool:
     )
 
 
+def _recent_lifecycle_window_ok(result: Any, window_bars: int) -> bool:
+    if not result:
+        return False
+    w = max(1, int(window_bars))
+    direction = str(getattr(result, "setup_direction", "bull")).lower()
+    phase = int(getattr(result, "lifecycle_phase", 1))
+    touch_age = int(getattr(result, "outer_touch_age", 999))
+    dbl_age = int(getattr(result, "band_width_double_age", 999))
+    if direction == "bear":
+        cross_age = min(int(getattr(result, "macd_bear_cross_age", 999)), int(getattr(result, "stoch_bear_cross_age", 999)))
+    else:
+        cross_age = min(int(getattr(result, "macd_cross_age", 999)), int(getattr(result, "stoch_cross_age", 999)))
+    # New setup rule: progression should be active recently, not historical.
+    return bool(phase >= 2 and min(touch_age, dbl_age, cross_age) <= w)
+
+
 def _precision_entry_ok(intraday: list[Candle], daily: Any, args: SimpleNamespace) -> bool:
     # Course precision ladder: 21 (daily), 13 (233), 8/5 (55/34 style intraday refinement).
     direction = str(getattr(daily, "setup_direction", "bull")).lower()
@@ -849,6 +867,10 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
             tf233_has_3x = False
             tf55_has_3x = False
             tf34_has_3x = False
+            daily_window_bars = int(getattr(args, "recent_daily_bars", 15) or 15)
+            tf233_window_bars = int(getattr(args, "recent_233_bars", 15) or 15)
+            daily_recent_ok = _recent_lifecycle_window_ok(daily, daily_window_bars)
+            tf233_recent_ok = False
 
             daily_candles = fetch_history(symbol)
 
@@ -866,6 +888,7 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                 if args.require_daily_and_233:
                     c233 = resample_to_minutes(intraday, target_minutes=233)
                     tf233 = analyze_candles(symbol, c233, "233m")
+                    tf233_recent_ok = _recent_lifecycle_window_ok(tf233, tf233_window_bars)
                     if tf233 and passes_secondary_timeframe_filters(tf233, args):
                         secondary_pass = True
 
@@ -905,7 +928,9 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                         return None
 
             # Hard book rule: if there is no 3x, skip this stock.
-            if not (daily_has_3x or tf233_has_3x or tf55_has_3x or tf34_has_3x):
+            if not (daily_recent_ok or tf233_recent_ok):
+                return None
+            if not (daily_has_3x or tf233_has_3x or tf55_has_3x or tf34_has_3x or daily_recent_ok or tf233_recent_ok):
                 return None
             return daily
         except RuntimeError:
@@ -1094,6 +1119,8 @@ def scan_stream() -> Response:
             tier_args.require_band_widen_window = require_widen_window_tiers[tier_i]
             tier_args.require_band_ride = True
             tier_args.min_band_ride_score = band_ride_tiers[tier_i]
+            tier_args.recent_daily_bars = 15
+            tier_args.recent_233_bars = 15
             if idx > 0:
                 yield json.dumps(
                     {
