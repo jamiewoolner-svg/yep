@@ -198,7 +198,19 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     developing.min_adx = min(developing.min_adx, 6.0)
     developing.require_daily_and_233 = True
 
-    return [("strict", strict), ("confirm", confirm), ("developing", developing)]
+    watchlist = copy.deepcopy(developing)
+    watchlist.require_daily_and_233 = False
+    watchlist.require_macd_stoch_cross = False
+    watchlist.require_band_liftoff = False
+    watchlist.bb_spread_watchlist = True
+    watchlist.cross_lookback = max(watchlist.cross_lookback, 12)
+    watchlist.band_touch_lookback = max(watchlist.band_touch_lookback, 14)
+    watchlist.min_band_expansion = min(watchlist.min_band_expansion, -0.02)
+    watchlist.min_adx = min(watchlist.min_adx, 4.0)
+    watchlist.max_rsi = max(watchlist.max_rsi, 90.0)
+    watchlist.max_stoch_rsi_k = max(watchlist.max_stoch_rsi_k, 95.0)
+
+    return [("strict", strict), ("confirm", confirm), ("developing", developing), ("watchlist", watchlist)]
 
 
 def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
