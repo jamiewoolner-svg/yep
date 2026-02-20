@@ -226,6 +226,7 @@
     let activeController = null;
     let isScanning = false;
     let sortQueued = false;
+    let chartLoadInFlight = false;
     const chartModels = [];
 
     function pick(idx, series) { return idx.map(i => series[i]); }
@@ -283,11 +284,16 @@
         status.textContent = 'Scan is running. Click charts after scan completes to keep streaming fast.';
         return;
       }
+      if (chartLoadInFlight) {
+        status.textContent = 'A chart is already loading. Please wait one moment.';
+        return;
+      }
       const existing = chartModels.find(m => (m.chart?.symbol || '') === symbol);
       if (existing) {
         return;
       }
       try {
+        chartLoadInFlight = true;
         status.textContent = `Loading chart: ${symbol}...`;
         const resp = await fetch(`/chart_payload?symbol=${encodeURIComponent(symbol)}`);
         if (!resp.ok) {
@@ -308,6 +314,8 @@
         status.textContent = `Loaded chart: ${symbol}`;
       } catch (err) {
         status.textContent = `Chart load failed for ${symbol}: ${err}`;
+      } finally {
+        chartLoadInFlight = false;
       }
     }
 

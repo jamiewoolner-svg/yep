@@ -58,6 +58,9 @@ EVENT_CACHE_TTL_SEC = int(os.getenv("EVENT_CACHE_TTL_SEC", "1800"))
 EVENT_BLOCK_DAYS = int(os.getenv("EVENT_BLOCK_DAYS", "7"))
 _EVENT_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _EVENT_CACHE_LOCK = threading.Lock()
+CHART_CACHE_TTL_SEC = int(os.getenv("CHART_CACHE_TTL_SEC", "300"))
+_CHART_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_CHART_CACHE_LOCK = threading.Lock()
 
 
 def _http_get_text(url: str, timeout: int = 10) -> str:
@@ -131,6 +134,24 @@ def _cache_get(key: str) -> list[dict[str, Any]] | None:
 def _cache_set(key: str, payload: list[dict[str, Any]]) -> None:
     with _EVENT_CACHE_LOCK:
         _EVENT_CACHE[key] = (time.time(), payload)
+
+
+def _chart_cache_get(key: str) -> dict[str, Any] | None:
+    now = time.time()
+    with _CHART_CACHE_LOCK:
+        item = _CHART_CACHE.get(key)
+        if not item:
+            return None
+        ts, payload = item
+        if now - ts > CHART_CACHE_TTL_SEC:
+            _CHART_CACHE.pop(key, None)
+            return None
+        return payload
+
+
+def _chart_cache_set(key: str, payload: dict[str, Any]) -> None:
+    with _CHART_CACHE_LOCK:
+        _CHART_CACHE[key] = (time.time(), payload)
 
 
 def _fetch_fed_events(days_ahead: int = EVENT_LOOKAHEAD_DAYS) -> list[dict[str, Any]]:
@@ -854,6 +875,11 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
 
 
 def build_chart_payload(symbol: str, days: int) -> dict[str, Any]:
+    cache_key = f"{symbol.upper()}:{int(days)}"
+    cached = _chart_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     daily_candles = fetch_history(symbol)
     lookback = max(60, days)
     daily_candles = daily_candles[-lookback:]
@@ -865,10 +891,14 @@ def build_chart_payload(symbol: str, days: int) -> dict[str, Any]:
     if daily_chart:
         timeframes["1D"] = daily_chart
 
+    intraday_keep = {233: 120, 55: 90, 34: 80, 21: 70, 13: 60, 8: 50, 5: 40}
     try:
         intraday = fetch_intraday(symbol, interval_min=1)
         for minutes in (233, 55, 34, 21, 13, 8, 5):
             bars = resample_to_minutes(intraday, target_minutes=minutes)
+            keep = intraday_keep.get(minutes, 120)
+            if len(bars) > keep:
+                bars = bars[-keep:]
             tf_chart = _chart_from_candles(symbol, f"{minutes}m", bars)
             if tf_chart:
                 timeframes[f"{minutes}m"] = tf_chart
@@ -883,7 +913,9 @@ def build_chart_payload(symbol: str, days: int) -> dict[str, Any]:
     for chart in timeframes.values():
         chart["events"] = events
 
-    return {"symbol": symbol.upper(), "timeframes": timeframes}
+    payload = {"symbol": symbol.upper(), "timeframes": timeframes}
+    _chart_cache_set(cache_key, payload)
+    return payload
 
 
 @app.route("/", methods=["GET", "POST"])
