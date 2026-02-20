@@ -940,7 +940,6 @@ def scan_stream() -> Response:
     base_args = _ranked_scan_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = max(0, int(base_args.max_retries))
-    macro_block_events = _fetch_fed_events(EVENT_BLOCK_DAYS) + _fetch_labor_events(EVENT_BLOCK_DAYS)
     reference_symbol = str(os.getenv("PATTERN_REF_SYMBOL", "IBM")).strip().upper() or "IBM"
     reference_pattern = None
     reference_error = ""
@@ -954,7 +953,6 @@ def scan_stream() -> Response:
     @stream_with_context
     def _generate() -> Any:
         found = 0
-        blocked = 0
         total_symbols = len(symbols)
         yield json.dumps({"type": "status", "message": f"Universe size: {total_symbols} symbols"}) + "\n"
         if reference_pattern:
@@ -966,7 +964,7 @@ def scan_stream() -> Response:
             ) + "\n"
         elif reference_error:
             yield json.dumps({"type": "status", "message": f"Reference pattern skipped: {reference_error}"}) + "\n"
-        yield json.dumps({"type": "metrics", "scanned": 0, "matches": 0, "blocked": 0, "total": total_symbols, "tier": "ranked"}) + "\n"
+        yield json.dumps({"type": "metrics", "scanned": 0, "matches": 0, "total": total_symbols, "tier": "ranked"}) + "\n"
         yield json.dumps({"type": "status", "message": "Scanning ranked universe...", "tier": "ranked"}) + "\n"
 
         pending_symbols = list(symbols)
@@ -986,7 +984,7 @@ def scan_stream() -> Response:
                         {"type": "progress", "message": f"ranked: {scanned}/{len(symbols)} analyzed ({sym})"}
                     ) + "\n"
                     yield json.dumps(
-                        {"type": "metrics", "scanned": scanned, "matches": found, "blocked": blocked, "total": total_symbols, "tier": "ranked"}
+                        {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "ranked"}
                     ) + "\n"
 
                     try:
@@ -1001,20 +999,6 @@ def scan_stream() -> Response:
                     if not analyzed:
                         continue
 
-                    # Hard event-risk guard: skip symbols with major macro/earnings events in the next week.
-                    blocking_events = _upcoming_events_for_symbol(analyzed.symbol, EVENT_BLOCK_DAYS, macro_events=macro_block_events)
-                    if blocking_events:
-                        blocked += 1
-                        if blocked <= 5 or blocked % 25 == 0:
-                            head = blocking_events[0]
-                            yield json.dumps(
-                                {
-                                    "type": "status",
-                                    "message": f"Blocked {analyzed.symbol}: {head.get('label', 'Event')} on {head.get('date', '')}",
-                                }
-                            ) + "\n"
-                        continue
-
                     if reference_pattern:
                         direct_similarity = _pattern_similarity(reference_pattern, analyzed)
                         inverse_similarity = _inverse_pattern_similarity(reference_pattern, analyzed)
@@ -1027,7 +1011,7 @@ def scan_stream() -> Response:
                     row = _result_row(analyzed)
                     yield json.dumps({"type": "match", "tier": "ranked", "row": row}) + "\n"
                     yield json.dumps(
-                        {"type": "metrics", "scanned": scanned, "matches": found, "blocked": blocked, "total": total_symbols, "tier": "ranked"}
+                        {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "ranked"}
                     ) + "\n"
 
             if retry_symbols:
@@ -1042,10 +1026,10 @@ def scan_stream() -> Response:
             yield json.dumps(
                 {"type": "error", "message": f"No-skips mode failed. Could not fetch {len(hard_failures)} symbol(s). First: {first[0]} ({first[1]})"}
             ) + "\n"
-            yield json.dumps({"type": "done", "count": found, "blocked": blocked, "tier": "ranked"}) + "\n"
+            yield json.dumps({"type": "done", "count": found, "tier": "ranked"}) + "\n"
             return
 
-        yield json.dumps({"type": "done", "count": found, "blocked": blocked, "tier": "ranked"}) + "\n"
+        yield json.dumps({"type": "done", "count": found, "tier": "ranked"}) + "\n"
 
     return Response(_generate(), mimetype="application/x-ndjson")
 

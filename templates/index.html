@@ -180,7 +180,6 @@
         <span id="m-tier">Tier: -</span>
         <span id="m-scanned">Scanned: 0/0</span>
         <span id="m-matches">Matches: 0</span>
-        <span id="m-blocked">Blocked(7d events): 0</span>
       </div>
       {% if error %}<p class="err">{{ error }}</p>{% endif %}
     </div>
@@ -220,7 +219,6 @@
     const tierEl = document.getElementById('m-tier');
     const scannedEl = document.getElementById('m-scanned');
     const matchesEl = document.getElementById('m-matches');
-    const blockedEl = document.getElementById('m-blocked');
     const calendarNote = document.getElementById('calendar-note');
     const calendarList = document.getElementById('calendar-list');
     let activeController = null;
@@ -601,13 +599,12 @@
         status.textContent = `Error: ${msg.message}`;
       } else if (msg.type === 'done') {
         sortResultRows();
-        status.textContent = `Done. ${msg.count} match(es), blocked ${num(msg.blocked, 0)} by next-week events, tier: ${msg.tier}`;
+        status.textContent = `Done. ${msg.count} match(es), tier: ${msg.tier}`;
         loadCalendar(topSymbolsForCalendar());
       } else if (msg.type === 'metrics') {
         tierEl.textContent = `Tier: ${msg.tier}`;
         scannedEl.textContent = `Scanned: ${msg.scanned}/${msg.total}`;
         matchesEl.textContent = `Matches: ${msg.matches}`;
-        blockedEl.textContent = `Blocked(7d events): ${num(msg.blocked, 0)}`;
       }
     }
 
@@ -622,7 +619,6 @@
       tierEl.textContent = 'Tier: init';
       scannedEl.textContent = 'Scanned: 0/0';
       matchesEl.textContent = 'Matches: 0';
-      blockedEl.textContent = 'Blocked(7d events): 0';
       scanBtn.disabled = true;
 
       if (activeController) {
