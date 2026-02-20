@@ -1692,9 +1692,13 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     macd_down_pending = (macd_gap_prev > 0 and macd_gap_now < macd_gap_prev and macd_line >= macd_signal)
     stoch_up_pending = (stoch_gap_prev < 0 and stoch_gap_now > stoch_gap_prev and stoch_rsi_k <= stoch_rsi_d)
     stoch_down_pending = (stoch_gap_prev > 0 and stoch_gap_now < stoch_gap_prev and stoch_rsi_k >= stoch_rsi_d)
-    spread_recent = band_widen_window_ok or band_width_double_recent_ok
-    bull_phase2 = spread_recent and bull_band_ride_score >= 0.58 and touched_lower and outer_touch_age <= 14
-    bear_phase2 = spread_recent and bear_band_ride_score >= 0.58 and touched_upper and outer_touch_age <= 14
+    spread_recent = (
+        band_widen_window_ok
+        or band_width_double_recent_ok
+        or (band_width_slope3 >= 0 and band_width_percentile >= 0.50 and outer_touch_age <= 14)
+    )
+    bull_phase2 = spread_recent and bull_band_ride_score >= 0.50 and touched_lower and outer_touch_age <= 14
+    bear_phase2 = spread_recent and bear_band_ride_score >= 0.50 and touched_upper and outer_touch_age <= 14
     bull_phase3 = bull_phase2 and (stoch_up_recent or stoch_up_pending) and (macd_up_recent or macd_up_pending)
     bear_phase3 = bear_phase2 and (stoch_down_recent or stoch_down_pending) and (macd_down_recent or macd_down_pending)
     # Allow delayed confirmation: band-off can happen first, then MACD/Stoch cross within a few bars.

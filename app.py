@@ -1033,35 +1033,36 @@ def scan_stream() -> Response:
     # Coverage tiers: keep strict rules in tier 1, then relax BB gates gradually.
     bb_multiple_tiers = [
         float(getattr(base_args, "min_band_vs_prev_month", 2.0)),
-        max(1.8, float(getattr(base_args, "min_band_vs_prev_month", 2.0)) - 0.2),
         1.6,
+        1.3,
     ]
     bb_age_tiers = [
         int(getattr(base_args, "max_band_double_age", 14)),
-        max(16, int(getattr(base_args, "max_band_double_age", 14)) + 4),
-        22,
+        20,
+        28,
     ]
     bb_width_now_tiers = [
         float(getattr(base_args, "min_band_width_now", 0.08)),
-        0.07,
         0.06,
+        0.04,
     ]
     bb_pct_tiers = [
         float(getattr(base_args, "min_band_width_percentile", 0.60)),
-        0.55,
         0.50,
+        0.40,
     ]
     band_ride_tiers = [
         float(getattr(base_args, "min_band_ride_score", 0.62)),
-        0.58,
         0.52,
+        0.42,
     ]
     band_touch_lookback_tiers = [
         int(getattr(base_args, "band_touch_lookback", 14)),
         14,
         20,
     ]
-    require_widen_window_tiers = [True, True, False]
+    require_widen_window_tiers = [True, False, False]
+    require_band_ride_tiers = [True, True, False]
     reference_symbol = PATTERN_REF_SYMBOL_DEFAULT
     reference_pattern = None
     reference_error = ""
@@ -1117,7 +1118,7 @@ def scan_stream() -> Response:
             tier_args.min_band_width_percentile = bb_pct_tiers[tier_i]
             tier_args.band_touch_lookback = band_touch_lookback_tiers[tier_i]
             tier_args.require_band_widen_window = require_widen_window_tiers[tier_i]
-            tier_args.require_band_ride = True
+            tier_args.require_band_ride = require_band_ride_tiers[tier_i]
             tier_args.min_band_ride_score = band_ride_tiers[tier_i]
             tier_args.recent_daily_bars = 15
             tier_args.recent_233_bars = 15
@@ -1131,7 +1132,7 @@ def scan_stream() -> Response:
                             f"BB2xAge<={tier_args.max_band_double_age}d, "
                             f"BBNow>={tier_args.min_band_width_now:.3f}, "
                             f"touch<={tier_args.band_touch_lookback}d, "
-                            f"BandRide>={tier_args.min_band_ride_score:.2f}"
+                            f"BandRide>={'off' if not tier_args.require_band_ride else f'{tier_args.min_band_ride_score:.2f}'}"
                         ),
                         "tier": tier_label,
                     }
