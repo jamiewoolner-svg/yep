@@ -555,6 +555,8 @@ def _ranked_scan_args() -> SimpleNamespace:
     args.require_hourly = False
     args.require_weekly_context = False
     args.require_precision_entry = False
+    args.require_secondary_confirmation = False
+    args.scan_intraday_3x = True
     args.cross_lookback = max(args.cross_lookback, 14)
     args.triple_gap_max = 12
     args.min_adx = min(args.min_adx, 3.0)
@@ -667,7 +669,13 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
 
             daily_candles = fetch_history(symbol)
 
-            if args.require_daily_and_233 or getattr(args, "require_hourly", False) or getattr(args, "require_precision_entry", False):
+            need_secondary_confirmation = bool(
+                getattr(args, "require_secondary_confirmation", True)
+                and (args.require_daily_and_233 or getattr(args, "require_hourly", False))
+            )
+            scan_intraday_3x = bool(getattr(args, "scan_intraday_3x", False))
+
+            if args.require_daily_and_233 or getattr(args, "require_hourly", False) or getattr(args, "require_precision_entry", False) or scan_intraday_3x:
                 intraday = fetch_intraday(symbol, interval_min=args.intraday_interval_min)
                 tf233 = None
                 secondary_pass = False
@@ -686,8 +694,8 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
 
                 tf233_has_3x = bool(tf233 and _has_triple_cross(tf233, lookback, gap_max))
 
-                # Only compute 55/34 if daily/233 didn't already satisfy the 3x gate.
-                if not (daily_has_3x or tf233_has_3x):
+                # Compute 55/34 when needed for intraday 3x discovery, or if daily/233 didn't satisfy 3x.
+                if scan_intraday_3x or not (daily_has_3x or tf233_has_3x):
                     c55 = resample_to_minutes(intraday, target_minutes=55)
                     tf55 = analyze_candles(symbol, c55, "55m")
                     c34 = resample_to_minutes(intraday, target_minutes=34)
@@ -706,7 +714,7 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
 
                 # 3x on 55/34 => use daily for trend (enforced by direction match above).
 
-                if not secondary_pass:
+                if need_secondary_confirmation and not secondary_pass:
                     return None
 
                 if getattr(args, "require_precision_entry", False):
