@@ -428,7 +428,7 @@
         status.textContent = `No chart data available for ${chartBundle.symbol} (${tf}).`;
         return;
       }
-      const trimByTf = { '1D': 320, '233m': 220, '55m': 200, '34m': 180, '21m': 160, '13m': 140, '8m': 120, '5m': 100 };
+      const trimByTf = { '1D': 320, '233m': 120, '55m': 90, '34m': 80, '21m': 70, '13m': 60, '8m': 50, '5m': 40 };
       const keep = trimByTf[tf] || 320;
       const start = Math.max(0, (rawView?.dates?.length || 0) - keep);
       const view = {
@@ -459,6 +459,7 @@
       const x = view.dates;
       const intraday = String(view.timeframe || '').endsWith('m');
       const tinyTf = ['34m', '21m', '13m', '8m', '5m'].includes(tf);
+      const compactTf = intraday;
       const eventLineColor = {high: '#f26d6d', medium: '#f2bf5a', low: '#6da7f2'};
       const eventShapes = [];
       const eventAnnotations = [];
@@ -506,9 +507,9 @@
           increasing: {line: {color: '#3fb27f'}},
           decreasing: {line: {color: '#d86b6b'}}
         },
-        {x, y: view.sma50, name: 'SMA50', line: {color: '#ff7f0e'}, xaxis: 'x', yaxis: 'y'},
-        {x, y: view.sma89, name: 'SMA89', line: {color: '#2ca02c'}, xaxis: 'x', yaxis: 'y'},
-        {x, y: view.sma200, name: 'SMA200', line: {color: '#9467bd'}, xaxis: 'x', yaxis: 'y'},
+        {x, y: view.sma50, name: 'SMA50', line: {color: '#ff7f0e', width: compactTf ? 2.2 : 1.6}, xaxis: 'x', yaxis: 'y'},
+        {x, y: compactTf ? [] : view.sma89, name: 'SMA89', line: {color: '#2ca02c', width: 1.2}, xaxis: 'x', yaxis: 'y'},
+        {x, y: compactTf ? [] : view.sma200, name: 'SMA200', line: {color: '#9467bd', width: 1.2}, xaxis: 'x', yaxis: 'y'},
         {x, y: view.bb_upper, name: 'BB Upper', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
         {x, y: view.bb_lower, name: 'BB Lower', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
         {x: tinyTf ? [] : pickRecent(view.sma_cross_up_idx, x), y: tinyTf ? [] : pickRecent(view.sma_cross_up_idx, view.close), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 8}, name: 'SMA Up', xaxis: 'x', yaxis: 'y'},
@@ -528,8 +529,8 @@
         paper_bgcolor: '#132230',
         plot_bgcolor: '#132230',
         font: {color: '#d8e9f6'},
-        hovermode: 'x unified',
-        legend: {orientation: 'h', y: -0.08, font: {size: 10}},
+        hovermode: compactTf ? 'x' : 'x unified',
+        legend: {orientation: 'h', y: -0.08, font: {size: compactTf ? 9 : 10}},
         grid: {rows: 3, columns: 1, pattern: 'independent', roworder: 'top to bottom'},
         shapes: eventShapes,
         annotations: eventAnnotations,
@@ -541,13 +542,14 @@
           gridcolor: '#2a3d4e',
           rangeslider: {visible: false},
           tickformat: intraday ? '%m-%d %H:%M' : '%Y-%m-%d',
-          rangebreaks: intraday ? [{bounds: ['sat', 'mon']}, {pattern: 'hour', bounds: [16, 9.5]}] : []
+          nticks: compactTf ? 8 : 12,
+          rangebreaks: intraday ? [{bounds: ['sat', 'mon']}] : []
         },
-        yaxis: {domain: [0.52, 1], title: 'Price', showgrid: true, gridcolor: '#2a3d4e'},
-        xaxis2: {domain: [0, 1], anchor: 'y2', showgrid: true, gridcolor: '#2a3d4e', matches: 'x'},
-        yaxis2: {domain: [0.26, 0.48], title: 'MACD', showgrid: true, gridcolor: '#2a3d4e', zeroline: true, zerolinecolor: '#4f6f85'},
-        xaxis3: {domain: [0, 1], anchor: 'y3', showgrid: true, gridcolor: '#2a3d4e', matches: 'x'},
-        yaxis3: {domain: [0, 0.22], title: 'StochRSI', range: [0, 100], showgrid: true, gridcolor: '#2a3d4e', tickvals: [20, 50, 80]}
+        yaxis: {domain: compactTf ? [0.56, 1] : [0.52, 1], title: 'Price', showgrid: true, gridcolor: '#2a3d4e'},
+        xaxis2: {domain: [0, 1], anchor: 'y2', showgrid: true, gridcolor: '#2a3d4e', matches: 'x', nticks: compactTf ? 8 : 12},
+        yaxis2: {domain: compactTf ? [0.30, 0.52] : [0.26, 0.48], title: 'MACD', showgrid: true, gridcolor: '#2a3d4e', zeroline: true, zerolinecolor: '#4f6f85'},
+        xaxis3: {domain: [0, 1], anchor: 'y3', showgrid: true, gridcolor: '#2a3d4e', matches: 'x', nticks: compactTf ? 8 : 12},
+        yaxis3: {domain: [0, 0.26], title: 'StochRSI', range: [0, 100], showgrid: true, gridcolor: '#2a3d4e', tickvals: [20, 50, 80]}
       }, {responsive: true});
     }
 
