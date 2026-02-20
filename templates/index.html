@@ -7,34 +7,128 @@
   <script defer src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <style>
     :root {
-      --bg: #f3f5f7;
+      --bg: #eef2f5;
+      --bg2: #dde7ef;
       --card: #ffffff;
-      --ink: #10212b;
-      --muted: #4d6473;
-      --line: #d5dfe5;
+      --ink: #12222f;
+      --muted: #4f6677;
+      --line: #cfdce5;
       --accent: #0b7fab;
-      --accent-2: #0f9d58;
+      --accent-dark: #075f80;
+      --danger: #8a1d1d;
+      --shadow: 0 14px 30px rgba(11, 45, 69, 0.10);
     }
-    body { margin: 0; font-family: "Avenir Next", "Segoe UI", sans-serif; color: var(--ink); background: radial-gradient(circle at 10% 10%, #e7f4fb 0, var(--bg) 35%), var(--bg); }
-    .wrap { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
-    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 28px rgba(16,33,43,0.06); padding: 16px; margin-bottom: 16px; }
-    h1 { margin: 0 0 10px; font-size: 24px; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 600px at 6% 0%, #d9edf8 0%, transparent 60%),
+        radial-gradient(900px 450px at 94% 14%, #e6f0d8 0%, transparent 55%),
+        linear-gradient(180deg, var(--bg), var(--bg2));
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1240px; margin: 28px auto; padding: 0 16px 24px; }
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,0.98), #ffffff);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+      margin-bottom: 16px;
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; line-height: 1.15; letter-spacing: 0.01em; }
+    h2 { margin: 0 0 12px; font-size: 20px; line-height: 1.2; }
+    h3 { margin: 12px 0 8px; font-size: 16px; line-height: 1.2; color: var(--ink); }
     p { color: var(--muted); margin: 0 0 12px; }
     .grid { display: grid; gap: 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .full { grid-column: 1 / -1; }
-    label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
-    input[type="text"], input[type="number"] { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; }
-    .checks { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 4px; }
-    .checks label { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--ink); }
-    button { border: 0; border-radius: 10px; padding: 10px 14px; background: linear-gradient(120deg, var(--accent), #065d7d); color: white; font-weight: 700; cursor: pointer; }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: right; }
+    label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 5px; font-weight: 600; letter-spacing: 0.02em; }
+    input[type="text"], input[type="number"], select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      font: inherit;
+      color: var(--ink);
+      background: #fff;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    input:focus, select:focus {
+      outline: 0;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(11, 127, 171, 0.15);
+    }
+    .checks { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+    .checks label {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      margin: 0;
+      font-size: 13px;
+      color: var(--ink);
+      background: #f5f9fc;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-weight: 500;
+    }
+    .checks input[type="checkbox"] { margin: 0; }
+    .actions { margin-top: 12px; display: flex; gap: 10px; }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 15px;
+      background: linear-gradient(125deg, var(--accent), var(--accent-dark));
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.01em;
+      transition: transform 0.12s ease, opacity 0.12s ease;
+    }
+    button:hover { transform: translateY(-1px); }
+    button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+    #stop-btn { background: linear-gradient(125deg, var(--danger), #621313); }
+    .status {
+      font-weight: 700;
+      color: var(--accent-dark);
+      margin-top: 12px;
+      min-height: 22px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      background: #edf7fc;
+      border: 1px solid #c9e4f1;
+    }
+    .metrics { display: flex; gap: 10px; font-size: 12px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
+    .metrics span { background: #f5f9fc; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 980px; background: #fff; }
+    th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: right; white-space: nowrap; }
+    th { position: sticky; top: 0; background: #f1f7fb; color: #1f3848; font-weight: 700; z-index: 1; }
     th:first-child, td:first-child { text-align: left; }
-    .err { color: #9d1c1c; font-weight: 700; }
-    .status { font-weight: 700; color: var(--accent); margin-top: 10px; min-height: 20px; }
-    .metrics { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-top: 6px; }
-    .chart-box { height: 760px; margin-top: 10px; }
-    @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .chart-box { height: 620px; } }
+    tbody tr:nth-child(even) { background: #fafcfe; }
+    .err { color: var(--danger); font-weight: 700; margin-top: 8px; }
+    #empty-note { margin-top: 10px; }
+    .chart-box {
+      height: 760px;
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+    @media (max-width: 900px) {
+      .wrap { margin-top: 16px; }
+      h1 { font-size: 24px; }
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .chart-box { height: 620px; }
+      .card { padding: 14px; border-radius: 14px; }
+    }
+    @media (max-width: 600px) {
+      .grid { grid-template-columns: 1fr; }
+      .actions { flex-direction: column; }
+      button { width: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -70,7 +164,7 @@
           </div>
           <div>
             <label>Data Source</label>
-            <select name="data_source" style="width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px;">
+            <select name="data_source">
               <option value="polygon" {% if form_values.data_source == "polygon" %}selected{% endif %}>Polygon</option>
               <option value="auto" {% if form_values.data_source == "auto" %}selected{% endif %}>Auto</option>
               <option value="stooq" {% if form_values.data_source == "stooq" %}selected{% endif %}>Stooq</option>
@@ -87,7 +181,7 @@
           <div><label>Min ADX</label><input type="number" name="min_adx" value="{{ form_values.min_adx }}" step="0.1"></div>
           <div>
             <label>Signal Direction</label>
-            <select name="signal_direction" style="width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px;">
+            <select name="signal_direction">
               <option value="both" {% if form_values.signal_direction == "both" %}selected{% endif %}>Both</option>
               <option value="bull" {% if form_values.signal_direction == "bull" %}selected{% endif %}>Bullish</option>
               <option value="bear" {% if form_values.signal_direction == "bear" %}selected{% endif %}>Bearish</option>
@@ -114,9 +208,9 @@
             <label><input type="checkbox" name="no_skips" {% if form_values.no_skips %}checked{% endif %}> No skips (fail if unresolved)</label>
           </div>
         </div>
-        <div style="margin-top: 12px; display: flex; gap: 10px;">
+        <div class="actions">
           <button type="submit" id="scan-btn">Run Scan</button>
-          <button type="button" id="stop-btn" style="background: #7a1f1f;">Stop</button>
+          <button type="button" id="stop-btn">Stop</button>
         </div>
       </form>
       <p class="status" id="scan-status"></p>
@@ -129,18 +223,20 @@
     </div>
 
     <div class="card">
-      <h1>Matches</h1>
-      <table>
-        <thead>
-          <tr><th>Symbol</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>MACD Age Bear</th><th>Stoch Age Bear</th><th>BB Exp</th><th>$Vol20</th><th>Score</th></tr>
-        </thead>
-        <tbody id="results-body"></tbody>
-      </table>
+      <h2>Matches</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Symbol</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>MACD Age Bear</th><th>Stoch Age Bear</th><th>BB Exp</th><th>$Vol20</th><th>Score</th></tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
       <p id="empty-note">No matches yet. Run a scan.</p>
     </div>
 
     <div class="card">
-      <h1>Charts</h1>
+      <h2>Charts</h2>
       <div id="charts"></div>
     </div>
   </div>
