@@ -108,6 +108,7 @@
             <label><input type="checkbox" name="require_macd_stoch_cross" {% if form_values.require_macd_stoch_cross %}checked{% endif %}> Require MACD+Stoch cross</label>
             <label><input type="checkbox" name="require_simultaneous_cross" {% if form_values.require_simultaneous_cross %}checked{% endif %}> Prefer same-bar cross</label>
             <label><input type="checkbox" name="require_band_liftoff" {% if form_values.require_band_liftoff %}checked{% endif %}> Require BB liftoff</label>
+            <label><input type="checkbox" name="bb_spread_watchlist" {% if form_values.bb_spread_watchlist %}checked{% endif %}> BB spread watchlist</label>
             <label><input type="checkbox" name="require_daily_and_233" {% if form_values.require_daily_and_233 %}checked{% endif %}> Require Daily + 233m</label>
             <label><input type="checkbox" name="auto_fallback" {% if form_values.auto_fallback %}checked{% endif %}> Auto fallback (strict to loose)</label>
             <label><input type="checkbox" name="no_skips" {% if form_values.no_skips %}checked{% endif %}> No skips (fail if unresolved)</label>

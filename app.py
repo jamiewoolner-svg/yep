@@ -74,6 +74,7 @@ def _build_args(form: Any) -> SimpleNamespace:
         require_macd_stoch_cross=(form.get("require_macd_stoch_cross") == "on"),
         require_simultaneous_cross=(form.get("require_simultaneous_cross") == "on"),
         require_band_liftoff=(form.get("require_band_liftoff") == "on"),
+        bb_spread_watchlist=(form.get("bb_spread_watchlist") == "on"),
         signal_direction=str(form.get("signal_direction", "both")),
         cross_lookback=_as_int(form, "cross_lookback", 4),
         band_touch_lookback=_as_int(form, "band_touch_lookback", 6),
@@ -119,6 +120,7 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     strict.pows = True
     strict.require_macd_stoch_cross = True
     strict.require_band_liftoff = True
+    strict.bb_spread_watchlist = False
     strict.require_simultaneous_cross = False
     strict.require_daily_and_233 = True
     strict.cross_lookback = min(strict.cross_lookback, 5)
@@ -130,6 +132,7 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     medium.require_simultaneous_cross = False
     medium.require_daily_and_233 = False
     medium.require_band_liftoff = False
+    medium.bb_spread_watchlist = True
     medium.cross_lookback = max(medium.cross_lookback, 7)
     medium.band_touch_lookback = max(medium.band_touch_lookback, 10)
     medium.min_band_expansion = min(medium.min_band_expansion, 0.01)
@@ -139,6 +142,7 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     loose.pows = False
     loose.require_macd_stoch_cross = False
     loose.require_band_liftoff = False
+    loose.bb_spread_watchlist = True
     loose.require_uptrend = False
     loose.require_macd_bull = False
     loose.require_di_bull = False
@@ -245,6 +249,7 @@ def index() -> str:
         "require_macd_stoch_cross": True,
         "require_simultaneous_cross": False,
         "require_band_liftoff": True,
+        "bb_spread_watchlist": True,
         "signal_direction": "both",
         "cross_lookback": 5,
         "band_touch_lookback": 8,

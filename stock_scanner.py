@@ -181,6 +181,11 @@ def parse_args() -> argparse.Namespace:
         help="Require outer Bollinger touch + widening bands + directional rejection/lift-off.",
     )
     parser.add_argument(
+        "--bb-spread-watchlist",
+        action="store_true",
+        help="Allow pre-liftoff Bollinger expansion candidates likely to mature into directional crosses.",
+    )
+    parser.add_argument(
         "--signal-direction",
         choices=["bull", "bear", "both"],
         default="both",
@@ -1030,6 +1035,7 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
     require_di_bull = args.require_di_bull
     require_macd_stoch_cross = args.require_macd_stoch_cross or args.pows
     require_band_liftoff = args.require_band_liftoff or args.pows
+    bb_spread_watchlist = getattr(args, "bb_spread_watchlist", False)
     require_simultaneous_cross = args.require_simultaneous_cross
     want_bull, want_bear = _direction_match(result, args)
 
@@ -1063,6 +1069,24 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
     if require_simultaneous_cross:
         bull_ok = bull_ok and (result.dual_cross_gap <= 1)
         bear_ok = bear_ok and (result.dual_bear_cross_gap <= 1)
+
+    # Pre-liftoff discovery path for setups that can evolve into 3x confirmation.
+    spread_floor = max(0.0, args.min_band_expansion * 0.5)
+    bull_bb_spread_ok = (
+        result.band_width_expansion >= spread_floor
+        and (
+            (result.touched_outer_band_recent and result.outer_touch_age <= args.band_touch_lookback + 2)
+            or (result.close >= result.bb_mid and result.macd >= result.macd_signal and result.stoch_rsi_k >= result.stoch_rsi_d)
+        )
+    )
+    bear_bb_spread_ok = (
+        result.band_width_expansion >= spread_floor
+        and (
+            (result.touched_outer_band_recent and result.outer_touch_age <= args.band_touch_lookback + 2)
+            or (result.close <= result.bb_mid and result.macd <= result.macd_signal and result.stoch_rsi_k <= result.stoch_rsi_d)
+        )
+    )
+
     if require_band_liftoff:
         bull_ok = bull_ok and (
             result.touched_outer_band_recent
@@ -1076,6 +1100,9 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
             and result.rejection_from_band
             and result.band_width_expansion >= args.min_band_expansion
         )
+    elif bb_spread_watchlist:
+        bull_ok = bull_ok and bull_bb_spread_ok
+        bear_ok = bear_ok and bear_bb_spread_ok
 
     # Avoid extremely stretched end-of-move candles in either direction.
     bull_ok = bull_ok and not (result.close > result.bb_upper * 1.03)
