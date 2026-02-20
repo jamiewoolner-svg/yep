@@ -190,12 +190,16 @@
     <div class="card">
       <h2>Charts</h2>
       <div class="chart-controls">
-        <span>Chart Scale</span>
-        <select id="chart-scale">
-          <option value="3M">3M</option>
-          <option value="6M" selected>6M</option>
-          <option value="1Y">1Y</option>
-          <option value="ALL">All</option>
+        <span>Candle Timeframe</span>
+        <select id="chart-timeframe">
+          <option value="1D" selected>1D</option>
+          <option value="233m">233m</option>
+          <option value="55m">55m</option>
+          <option value="34m">34m</option>
+          <option value="21m">21m</option>
+          <option value="13m">13m</option>
+          <option value="8m">8m</option>
+          <option value="5m">5m</option>
         </select>
       </div>
       <div id="charts"></div>
@@ -212,12 +216,11 @@
     const tierEl = document.getElementById('m-tier');
     const scannedEl = document.getElementById('m-scanned');
     const matchesEl = document.getElementById('m-matches');
-    const chartScaleEl = document.getElementById('chart-scale');
+    const chartTimeframeEl = document.getElementById('chart-timeframe');
     let activeController = null;
     const chartModels = [];
 
     function pick(idx, series) { return idx.map(i => series[i]); }
-    function pickOffset(idx, series, offset) { return idx.map(i => i - offset).filter(i => i >= 0 && i < series.length).map(i => series[i]); }
 
     function addRow(row) {
       const tr = document.createElement('tr');
@@ -261,65 +264,54 @@
       }
     }
 
-    function _windowStart(dates, scale) {
-      if (scale === 'ALL' || !dates.length) return 0;
-      const latest = new Date(dates[dates.length - 1] + 'T00:00:00Z');
-      const days = scale === '1Y' ? 365 : (scale === '6M' ? 183 : 92);
-      const cutoff = new Date(latest.getTime() - (days * 24 * 60 * 60 * 1000));
-      let start = 0;
-      for (let i = 0; i < dates.length; i += 1) {
-        const dt = new Date(dates[i] + 'T00:00:00Z');
-        if (dt >= cutoff) {
-          start = i;
-          break;
-        }
-      }
-      return start;
-    }
-
-    function _sliceChart(chart, scale) {
-      const start = _windowStart(chart.dates, scale);
-      return {
-        ...chart,
-        _start: start,
-        dates: chart.dates.slice(start),
-        open: chart.open.slice(start),
-        high: chart.high.slice(start),
-        low: chart.low.slice(start),
-        close: chart.close.slice(start),
-        sma50: chart.sma50.slice(start),
-        sma89: chart.sma89.slice(start),
-        sma200: chart.sma200.slice(start),
-        bb_upper: chart.bb_upper.slice(start),
-        bb_lower: chart.bb_lower.slice(start),
-        macd: chart.macd.slice(start),
-        macd_signal: chart.macd_signal.slice(start),
-        stoch_k: chart.stoch_k.slice(start),
-        stoch_d: chart.stoch_d.slice(start)
-      };
-    }
-
     function renderCharts() {
       charts.innerHTML = '';
-      const scale = chartScaleEl.value;
+      const tf = chartTimeframeEl.value;
       for (const model of chartModels) {
-        addChart(model.chart, model.tier, scale);
+        addChart(model.chart, model.tier, tf);
       }
     }
 
-    function addChart(chart, tier, scale) {
+    function addChart(chartBundle, tier, tf) {
       if (typeof Plotly === 'undefined') {
         status.textContent = 'Charts unavailable: Plotly CDN did not load.';
         return;
       }
-      const view = _sliceChart(chart, scale);
-      const id = `chart-${chart.symbol}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      const view = chartBundle.timeframes[tf] || chartBundle.timeframes['1D'] || Object.values(chartBundle.timeframes)[0];
+      if (!view) return;
+      const id = `chart-${chartBundle.symbol}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
       const block = document.createElement('div');
-      block.innerHTML = `<h3>${chart.symbol} (${tier}) · TF: ${chart.timeframe} · Scale: ${scale}</h3><div id="${id}" class="chart-box"></div>`;
+      block.innerHTML = `<h3>${chartBundle.symbol} (${tier}) · TF: ${view.timeframe}</h3><div id="${id}" class="chart-box"></div>`;
       charts.appendChild(block);
 
       const x = view.dates;
-      const start = view._start;
+      const eventLineColor = {high: '#f26d6d', medium: '#f2bf5a', low: '#6da7f2'};
+      const eventShapes = [];
+      const eventAnnotations = [];
+      for (const ev of (view.events || [])) {
+        const c = eventLineColor[ev.severity] || '#f2bf5a';
+        eventShapes.push({
+          type: 'line',
+          xref: 'x',
+          yref: 'paper',
+          x0: ev.date,
+          x1: ev.date,
+          y0: 0,
+          y1: 1,
+          line: {color: c, width: 1, dash: 'dot'}
+        });
+        eventAnnotations.push({
+          xref: 'x',
+          yref: 'paper',
+          x: ev.date,
+          y: 1.02,
+          text: ev.label,
+          showarrow: false,
+          font: {size: 10, color: c},
+          xanchor: 'left',
+          align: 'left'
+        });
+      }
       const traces = [
         {
           type: 'candlestick',
@@ -339,16 +331,16 @@
         {x, y: view.sma200, name: 'SMA200', line: {color: '#9467bd'}, xaxis: 'x', yaxis: 'y'},
         {x, y: view.bb_upper, name: 'BB Upper', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
         {x, y: view.bb_lower, name: 'BB Lower', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
-        {x: pickOffset(chart.sma_cross_up_idx, x, start), y: pickOffset(chart.sma_cross_up_idx, view.close, start), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 8}, name: 'SMA Up', xaxis: 'x', yaxis: 'y'},
-        {x: pickOffset(chart.sma_cross_down_idx, x, start), y: pickOffset(chart.sma_cross_down_idx, view.close, start), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 8}, name: 'SMA Down', xaxis: 'x', yaxis: 'y'},
+        {x: pick(view.sma_cross_up_idx, x), y: pick(view.sma_cross_up_idx, view.close), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 8}, name: 'SMA Up', xaxis: 'x', yaxis: 'y'},
+        {x: pick(view.sma_cross_down_idx, x), y: pick(view.sma_cross_down_idx, view.close), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 8}, name: 'SMA Down', xaxis: 'x', yaxis: 'y'},
         {x, y: view.macd, name: 'MACD', line: {color: '#17becf'}, xaxis: 'x2', yaxis: 'y2'},
         {x, y: view.macd_signal, name: 'Signal', line: {color: '#bcbd22'}, xaxis: 'x2', yaxis: 'y2'},
-        {x: pickOffset(chart.macd_cross_up_idx, x, start), y: pickOffset(chart.macd_cross_up_idx, view.macd, start), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'MACD Up', xaxis: 'x2', yaxis: 'y2'},
-        {x: pickOffset(chart.macd_cross_down_idx, x, start), y: pickOffset(chart.macd_cross_down_idx, view.macd, start), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'MACD Down', xaxis: 'x2', yaxis: 'y2'},
+        {x: pick(view.macd_cross_up_idx, x), y: pick(view.macd_cross_up_idx, view.macd), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'MACD Up', xaxis: 'x2', yaxis: 'y2'},
+        {x: pick(view.macd_cross_down_idx, x), y: pick(view.macd_cross_down_idx, view.macd), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'MACD Down', xaxis: 'x2', yaxis: 'y2'},
         {x, y: view.stoch_k, name: 'Stoch %K', line: {color: '#e377c2'}, xaxis: 'x3', yaxis: 'y3'},
         {x, y: view.stoch_d, name: 'Stoch %D', line: {color: '#8c564b'}, xaxis: 'x3', yaxis: 'y3'},
-        {x: pickOffset(chart.stoch_cross_up_idx, x, start), y: pickOffset(chart.stoch_cross_up_idx, view.stoch_k, start), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'Stoch Up', xaxis: 'x3', yaxis: 'y3'},
-        {x: pickOffset(chart.stoch_cross_down_idx, x, start), y: pickOffset(chart.stoch_cross_down_idx, view.stoch_k, start), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'Stoch Down', xaxis: 'x3', yaxis: 'y3'}
+        {x: pick(view.stoch_cross_up_idx, x), y: pick(view.stoch_cross_up_idx, view.stoch_k), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'Stoch Up', xaxis: 'x3', yaxis: 'y3'},
+        {x: pick(view.stoch_cross_down_idx, x), y: pick(view.stoch_cross_down_idx, view.stoch_k), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'Stoch Down', xaxis: 'x3', yaxis: 'y3'}
       ];
 
       Plotly.newPlot(id, traces, {
@@ -358,6 +350,8 @@
         font: {color: '#d8e9f6'},
         legend: {orientation: 'h'},
         grid: {rows: 3, columns: 1, pattern: 'independent', roworder: 'top to bottom'},
+        shapes: eventShapes,
+        annotations: eventAnnotations,
         xaxis: {domain: [0, 1], anchor: 'y', showgrid: true, gridcolor: '#2a3d4e', rangeslider: {visible: false}},
         yaxis: {domain: [0.52, 1], title: 'Price', showgrid: true, gridcolor: '#2a3d4e'},
         xaxis2: {domain: [0, 1], anchor: 'y2', showgrid: true, gridcolor: '#2a3d4e', matches: 'x'},
@@ -451,7 +445,7 @@
       }
     });
 
-    chartScaleEl.addEventListener('change', () => {
+    chartTimeframeEl.addEventListener('change', () => {
       if (chartModels.length) {
         renderCharts();
       }

@@ -5,6 +5,15 @@ import concurrent.futures
 import copy
 import json
 import math
+import os
+import re
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import date, datetime, timedelta
+from html import unescape
 from types import SimpleNamespace
 from typing import Any
 
@@ -39,6 +48,239 @@ from stock_scanner import (
 )
 
 app = Flask(__name__)
+
+FED_CALENDAR_ROOT = "https://www.federalreserve.gov"
+FED_WHATS_NEXT_URL = "https://www.federalreserve.gov/whatsnext.htm"
+BLS_EMPLOYMENT_SCHEDULE_URL = "https://www.bls.gov/schedule/news_release/empsit.htm"
+YAHOO_QUOTE_SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary"
+EVENT_LOOKAHEAD_DAYS = int(os.getenv("EVENT_LOOKAHEAD_DAYS", "120"))
+EVENT_CACHE_TTL_SEC = int(os.getenv("EVENT_CACHE_TTL_SEC", "1800"))
+_EVENT_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_EVENT_CACHE_LOCK = threading.Lock()
+
+
+def _http_get_text(url: str, timeout: int = 10) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (YEPSTOCKS/1.0)"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
+def _http_get_json(url: str, timeout: int = 10) -> dict[str, Any]:
+    raw = _http_get_text(url, timeout=timeout)
+    return json.loads(raw)
+
+
+def _strip_tags(html_text: str) -> str:
+    return re.sub(r"<[^>]+>", " ", html_text)
+
+
+def _month_num(name: str) -> int | None:
+    lookup = {
+        "jan": 1,
+        "january": 1,
+        "feb": 2,
+        "february": 2,
+        "mar": 3,
+        "march": 3,
+        "apr": 4,
+        "april": 4,
+        "may": 5,
+        "jun": 6,
+        "june": 6,
+        "jul": 7,
+        "july": 7,
+        "aug": 8,
+        "august": 8,
+        "sep": 9,
+        "sept": 9,
+        "september": 9,
+        "oct": 10,
+        "october": 10,
+        "nov": 11,
+        "november": 11,
+        "dec": 12,
+        "december": 12,
+    }
+    return lookup.get(name.strip().lower().rstrip("."))
+
+
+def _parse_date_flexible(value: str) -> date | None:
+    cleaned = value.strip().replace("Sept.", "Sep.").replace("Sept", "Sep")
+    for fmt in ("%b. %d, %Y", "%b %d, %Y", "%B %d, %Y"):
+        try:
+            return datetime.strptime(cleaned, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _cache_get(key: str) -> list[dict[str, Any]] | None:
+    now = time.time()
+    with _EVENT_CACHE_LOCK:
+        item = _EVENT_CACHE.get(key)
+        if not item:
+            return None
+        ts, payload = item
+        if now - ts > EVENT_CACHE_TTL_SEC:
+            _EVENT_CACHE.pop(key, None)
+            return None
+        return payload
+
+
+def _cache_set(key: str, payload: list[dict[str, Any]]) -> None:
+    with _EVENT_CACHE_LOCK:
+        _EVENT_CACHE[key] = (time.time(), payload)
+
+
+def _fetch_fed_events(days_ahead: int = EVENT_LOOKAHEAD_DAYS) -> list[dict[str, Any]]:
+    cache_key = f"fed:{days_ahead}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    today = date.today()
+    end_date = today + timedelta(days=days_ahead)
+    events: list[dict[str, Any]] = []
+    try:
+        root_html = _http_get_text(FED_WHATS_NEXT_URL, timeout=8)
+        links = re.findall(r'href="(/newsevents/20\d{2}[-/][a-z0-9]+\.htm)"', root_html, flags=re.I)
+        month_links = sorted({urllib.parse.urljoin(FED_CALENDAR_ROOT, p) for p in links})
+        for url in month_links:
+            page = _http_get_text(url, timeout=8)
+            if "FOMC Meetings" not in page:
+                continue
+            text = _strip_tags(unescape(page))
+            text = " ".join(text.split())
+            ym = re.search(r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{2})", text)
+            if not ym:
+                continue
+            month = _month_num(ym.group(1))
+            year = int(ym.group(2))
+            if not month:
+                continue
+
+            # Expected phrasing: "FOMC Meeting Two-day meeting, April 28 - 29 Press Conference 29"
+            for m in re.finditer(
+                r"FOMC Meeting.*?Two-day meeting,\s*([A-Za-z]+)\s*(\d{1,2})\s*-\s*(\d{1,2})",
+                text,
+                flags=re.I,
+            ):
+                m_month = _month_num(m.group(1)) or month
+                end_day = int(m.group(3))
+                try:
+                    d = date(year, m_month, end_day)
+                except ValueError:
+                    continue
+                if today <= d <= end_date:
+                    events.append(
+                        {
+                            "date": d.isoformat(),
+                            "label": "FOMC Decision",
+                            "category": "macro",
+                            "severity": "high",
+                            "source": "federalreserve.gov",
+                        }
+                    )
+    except Exception:
+        pass
+
+    # de-dup + sort
+    uniq: dict[tuple[str, str], dict[str, Any]] = {}
+    for e in events:
+        uniq[(e["date"], e["label"])] = e
+    out = sorted(uniq.values(), key=lambda x: x["date"])
+    _cache_set(cache_key, out)
+    return out
+
+
+def _fetch_labor_events(days_ahead: int = EVENT_LOOKAHEAD_DAYS) -> list[dict[str, Any]]:
+    cache_key = f"labor:{days_ahead}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    today = date.today()
+    end_date = today + timedelta(days=days_ahead)
+    events: list[dict[str, Any]] = []
+    try:
+        html_text = _http_get_text(BLS_EMPLOYMENT_SCHEDULE_URL, timeout=8)
+        text = _strip_tags(unescape(html_text))
+        text = " ".join(text.split())
+        # Table contains: "Reference Month Release Date Release Time ... Jan. 09, 2026 08:30 AM"
+        for m in re.finditer(r"([A-Za-z]{3,9}\.?\s+\d{1,2},\s+20\d{2})\s+08:30\s+AM", text):
+            d = _parse_date_flexible(m.group(1))
+            if not d:
+                continue
+            if today <= d <= end_date:
+                events.append(
+                    {
+                        "date": d.isoformat(),
+                        "label": "BLS Employment Situation",
+                        "category": "macro",
+                        "severity": "high",
+                        "source": "bls.gov",
+                    }
+                )
+    except Exception:
+        pass
+
+    out = sorted(events, key=lambda x: x["date"])
+    _cache_set(cache_key, out)
+    return out
+
+
+def _fetch_symbol_earnings_event(symbol: str, days_ahead: int = EVENT_LOOKAHEAD_DAYS) -> list[dict[str, Any]]:
+    cache_key = f"earn:{symbol.upper()}:{days_ahead}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    today = date.today()
+    end_date = today + timedelta(days=days_ahead)
+    events: list[dict[str, Any]] = []
+    try:
+        safe_symbol = urllib.parse.quote(symbol.upper().replace(".", "-"))
+        url = f"{YAHOO_QUOTE_SUMMARY_URL}/{safe_symbol}?modules=calendarEvents"
+        payload = _http_get_json(url, timeout=8)
+        result = ((payload.get("quoteSummary", {}).get("result") or [None])[0] or {})
+        earnings = ((result.get("calendarEvents") or {}).get("earnings") or {})
+        earnings_dates = earnings.get("earningsDate") or []
+        for item in earnings_dates:
+            ts = item.get("raw")
+            if ts is None:
+                continue
+            d = datetime.utcfromtimestamp(int(ts)).date()
+            if today <= d <= end_date:
+                events.append(
+                    {
+                        "date": d.isoformat(),
+                        "label": f"{symbol.upper()} Earnings",
+                        "category": "earnings",
+                        "severity": "high",
+                        "source": "yahoo",
+                    }
+                )
+    except Exception:
+        pass
+
+    out = sorted(events, key=lambda x: x["date"])
+    _cache_set(cache_key, out)
+    return out
+
+
+def _risk_events_for_symbol(symbol: str, chart_dates: list[str]) -> list[dict[str, Any]]:
+    # Include recent and near-future events around the chart window.
+    if chart_dates:
+        start = datetime.strptime(chart_dates[0], "%Y-%m-%d").date() - timedelta(days=7)
+        end = datetime.strptime(chart_dates[-1], "%Y-%m-%d").date() + timedelta(days=30)
+    else:
+        start = date.today() - timedelta(days=7)
+        end = date.today() + timedelta(days=30)
+
+    events = _fetch_fed_events(EVENT_LOOKAHEAD_DAYS) + _fetch_labor_events(EVENT_LOOKAHEAD_DAYS) + _fetch_symbol_earnings_event(symbol, EVENT_LOOKAHEAD_DAYS)
+    filtered = [e for e in events if start <= datetime.strptime(e["date"], "%Y-%m-%d").date() <= end]
+    filtered.sort(key=lambda x: x["date"])
+    return filtered
 
 
 def _safe_num(value: Any, ndigits: int = 3) -> float:
@@ -99,6 +341,60 @@ def _build_args(form: Any) -> SimpleNamespace:
 
 def _to_json_series(values: list[float]) -> list[float | None]:
     return [None if (isinstance(v, float) and math.isnan(v)) else float(v) for v in values]
+
+
+def _chart_from_candles(symbol: str, timeframe: str, candles: list[Candle]) -> dict[str, Any] | None:
+    if len(candles) < 35:
+        return None
+
+    if timeframe == "1D":
+        dates = [c.date.strftime("%Y-%m-%d") for c in candles]
+    else:
+        dates = [c.date.strftime("%Y-%m-%d %H:%M") for c in candles]
+
+    opens = [c.open for c in candles]
+    highs = [c.high for c in candles]
+    lows = [c.low for c in candles]
+    closes = [c.close for c in candles]
+
+    sma50 = sma_series(closes, 50)
+    sma89 = sma_series(closes, 89)
+    sma200 = sma_series(closes, 200)
+    bb_mid = sma_series(closes, POWS_BB_LENGTH)
+    bb_std = rolling_stdev(closes, POWS_BB_LENGTH)
+    bb_upper = [m + POWS_BB_STDDEV * s if not (math.isnan(m) or math.isnan(s)) else math.nan for m, s in zip(bb_mid, bb_std)]
+    bb_lower = [m - POWS_BB_STDDEV * s if not (math.isnan(m) or math.isnan(s)) else math.nan for m, s in zip(bb_mid, bb_std)]
+    stoch_k, stoch_d = stoch_rsi_series(closes, POWS_RSI_LENGTH, 21, 3, 5)
+    macd_line, macd_signal = macd_series(closes, POWS_MACD_FAST, POWS_MACD_SLOW, POWS_MACD_SIGNAL)
+
+    sma_up, sma_down = find_crossings(sma50, sma89)
+    macd_up, macd_down = find_crossings(macd_line, macd_signal)
+    stoch_up, stoch_down = find_crossings(stoch_k, stoch_d)
+
+    return {
+        "symbol": symbol.upper(),
+        "timeframe": timeframe,
+        "dates": dates,
+        "open": opens,
+        "high": highs,
+        "low": lows,
+        "close": closes,
+        "sma50": _to_json_series(sma50),
+        "sma89": _to_json_series(sma89),
+        "sma200": _to_json_series(sma200),
+        "bb_upper": _to_json_series(bb_upper),
+        "bb_lower": _to_json_series(bb_lower),
+        "macd": _to_json_series(macd_line),
+        "macd_signal": _to_json_series(macd_signal),
+        "stoch_k": _to_json_series(stoch_k),
+        "stoch_d": _to_json_series(stoch_d),
+        "sma_cross_up_idx": sma_up,
+        "sma_cross_down_idx": sma_down,
+        "macd_cross_up_idx": macd_up,
+        "macd_cross_down_idx": macd_down,
+        "stoch_cross_up_idx": stoch_up,
+        "stoch_cross_down_idx": stoch_down,
+    }
 
 
 def _result_row(analyzed: Any) -> dict[str, Any]:
@@ -391,58 +687,36 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
 
 
 def build_chart_payload(symbol: str, days: int) -> dict[str, Any]:
-    candles = fetch_history(symbol)
+    daily_candles = fetch_history(symbol)
     lookback = max(60, days)
-    candles = candles[-lookback:]
-    if len(candles) < 60:
+    daily_candles = daily_candles[-lookback:]
+    if len(daily_candles) < 35:
         raise RuntimeError(f"Not enough data to chart {symbol}")
 
-    dates = [c.date.strftime("%Y-%m-%d") for c in candles]
-    opens = [c.open for c in candles]
-    highs = [c.high for c in candles]
-    lows = [c.low for c in candles]
-    closes = [c.close for c in candles]
+    timeframes: dict[str, dict[str, Any]] = {}
+    daily_chart = _chart_from_candles(symbol, "1D", daily_candles)
+    if daily_chart:
+        timeframes["1D"] = daily_chart
 
-    sma50 = sma_series(closes, 50)
-    sma89 = sma_series(closes, 89)
-    sma200 = sma_series(closes, 200)
+    try:
+        intraday = fetch_intraday(symbol, interval_min=1)
+        for minutes in (233, 55, 34, 21, 13, 8, 5):
+            bars = resample_to_minutes(intraday, target_minutes=minutes)
+            tf_chart = _chart_from_candles(symbol, f"{minutes}m", bars)
+            if tf_chart:
+                timeframes[f"{minutes}m"] = tf_chart
+    except Exception:
+        pass
 
-    bb_mid = sma_series(closes, POWS_BB_LENGTH)
-    bb_std = rolling_stdev(closes, POWS_BB_LENGTH)
-    bb_upper = [m + POWS_BB_STDDEV * s if not (math.isnan(m) or math.isnan(s)) else math.nan for m, s in zip(bb_mid, bb_std)]
-    bb_lower = [m - POWS_BB_STDDEV * s if not (math.isnan(m) or math.isnan(s)) else math.nan for m, s in zip(bb_mid, bb_std)]
+    if not timeframes:
+        raise RuntimeError(f"Not enough data to chart {symbol}")
 
-    stoch_k, stoch_d = stoch_rsi_series(closes, POWS_RSI_LENGTH, 21, 3, 5)
-    macd_line, macd_signal = macd_series(closes, POWS_MACD_FAST, POWS_MACD_SLOW, POWS_MACD_SIGNAL)
+    daily_dates = timeframes.get("1D", {}).get("dates", [])
+    events = _risk_events_for_symbol(symbol, daily_dates)
+    for chart in timeframes.values():
+        chart["events"] = events
 
-    sma_up, sma_down = find_crossings(sma50, sma89)
-    macd_up, macd_down = find_crossings(macd_line, macd_signal)
-    stoch_up, stoch_down = find_crossings(stoch_k, stoch_d)
-
-    return {
-        "symbol": symbol.upper(),
-        "timeframe": "1D",
-        "dates": dates,
-        "open": opens,
-        "high": highs,
-        "low": lows,
-        "close": closes,
-        "sma50": _to_json_series(sma50),
-        "sma89": _to_json_series(sma89),
-        "sma200": _to_json_series(sma200),
-        "bb_upper": _to_json_series(bb_upper),
-        "bb_lower": _to_json_series(bb_lower),
-        "macd": _to_json_series(macd_line),
-        "macd_signal": _to_json_series(macd_signal),
-        "stoch_k": _to_json_series(stoch_k),
-        "stoch_d": _to_json_series(stoch_d),
-        "sma_cross_up_idx": sma_up,
-        "sma_cross_down_idx": sma_down,
-        "macd_cross_up_idx": macd_up,
-        "macd_cross_down_idx": macd_down,
-        "stoch_cross_up_idx": stoch_up,
-        "stoch_cross_down_idx": stoch_down,
-    }
+    return {"symbol": symbol.upper(), "timeframes": timeframes}
 
 
 @app.route("/", methods=["GET", "POST"])
