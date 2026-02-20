@@ -2,6 +2,7 @@ services:
   - type: web
     name: yep
     runtime: python
+    pythonVersion: 3.14.3
     plan: starter
     region: oregon
     buildCommand: pip install -r requirements-web.txt
