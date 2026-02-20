@@ -134,6 +134,8 @@ class ScanResult:
     band_width_double_recent_ok: bool
     bull_band_ride_score: float
     bear_band_ride_score: float
+    liftoff_recent_age: int
+    rejection_recent_age: int
     band_widen_start_age: int
     band_widen_window_ok: bool
     liftoff_from_band: bool
@@ -1442,6 +1444,26 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
 
     liftoff_from_band = touched_lower and len(closes) >= 3 and closes[-1] > bb_lower and closes[-1] > closes[-2]
     rejection_from_band = touched_upper and len(closes) >= 3 and closes[-1] < bb_upper and closes[-1] < closes[-2]
+    liftoff_recent_age = 999
+    rejection_recent_age = 999
+    # Detect recent "came off the band" events, allowing delayed momentum confirmation.
+    for i in range(max(2, len(closes) - 14), len(closes)):
+        if i >= len(bb_upper_series) or i >= len(bb_lower_series):
+            continue
+        up_i = bb_upper_series[i]
+        lo_i = bb_lower_series[i]
+        if not math.isnan(up_i):
+            came_off_upper = (
+                highs[i - 1] >= bb_upper_series[i - 1] if i - 1 < len(bb_upper_series) and not math.isnan(bb_upper_series[i - 1]) else False
+            )
+            if came_off_upper and closes[i] < up_i and closes[i] < closes[i - 1]:
+                rejection_recent_age = min(rejection_recent_age, last_idx - i)
+        if not math.isnan(lo_i):
+            came_off_lower = (
+                lows[i - 1] <= bb_lower_series[i - 1] if i - 1 < len(bb_lower_series) and not math.isnan(bb_lower_series[i - 1]) else False
+            )
+            if came_off_lower and closes[i] > lo_i and closes[i] > closes[i - 1]:
+                liftoff_recent_age = min(liftoff_recent_age, last_idx - i)
     bw_now = (bb_upper - bb_lower) / bb_mid if bb_mid else math.nan
     prior_mid_idx = max(0, len(closes) - 6)
     prior_bw = math.nan
@@ -1673,8 +1695,12 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     bear_phase2 = spread_recent and bear_band_ride_score >= 0.58 and touched_upper and outer_touch_age <= 14
     bull_phase3 = bull_phase2 and stoch_up_recent and (macd_up_recent or macd_up_pending)
     bear_phase3 = bear_phase2 and stoch_down_recent and (macd_down_recent or macd_down_pending)
-    bull_phase4 = bull_phase3 and liftoff_from_band and macd_up_recent and stoch_up_recent
-    bear_phase4 = bear_phase3 and rejection_from_band and macd_down_recent and stoch_down_recent
+    # Allow delayed confirmation: band-off can happen first, then MACD/Stoch cross within a few bars.
+    confirm_lag_bars = 4
+    bull_band_off_recent = liftoff_from_band or (liftoff_recent_age <= confirm_lag_bars)
+    bear_band_off_recent = rejection_from_band or (rejection_recent_age <= confirm_lag_bars)
+    bull_phase4 = bull_phase3 and bull_band_off_recent and (macd_up_recent and stoch_up_recent)
+    bear_phase4 = bear_phase3 and bear_band_off_recent and (macd_down_recent and stoch_down_recent)
 
     if setup_direction == "bull":
         if bull_phase4:
@@ -1859,6 +1885,8 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         band_width_double_recent_ok=band_width_double_recent_ok,
         bull_band_ride_score=bull_band_ride_score,
         bear_band_ride_score=bear_band_ride_score,
+        liftoff_recent_age=liftoff_recent_age,
+        rejection_recent_age=rejection_recent_age,
         band_widen_start_age=band_widen_start_age,
         band_widen_window_ok=band_widen_window_ok,
         liftoff_from_band=liftoff_from_band,
