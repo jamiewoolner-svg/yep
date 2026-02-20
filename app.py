@@ -76,12 +76,12 @@ def _build_args(form: Any) -> SimpleNamespace:
         require_simultaneous_cross=(form.get("require_simultaneous_cross") == "on"),
         require_band_liftoff=(form.get("require_band_liftoff") == "on"),
         bb_spread_watchlist=(form.get("bb_spread_watchlist") == "on"),
-        signal_direction=str(form.get("signal_direction", "both")),
+        signal_direction="both",
         cross_lookback=_as_int(form, "cross_lookback", 4),
         band_touch_lookback=_as_int(form, "band_touch_lookback", 6),
         min_band_expansion=_as_float(form, "min_band_expansion", 0.05),
         require_daily_and_233=(form.get("require_daily_and_233") == "on"),
-        intraday_interval_min=_as_int(form, "intraday_interval_min", 5),
+        intraday_interval_min=5,
         auto_fallback=(form.get("auto_fallback") == "on"),
         no_skips=(form.get("no_skips") == "on"),
         max_retries=_as_int(form, "max_retries", 4),
@@ -240,7 +240,6 @@ def index() -> str:
         "use_sp500": False,
         "use_qqq": False,
         "pows": True,
-        "top": 20,
         "plot_days": 260,
         "min_price": 5.0,
         "max_price": 1000.0,
@@ -278,8 +277,7 @@ def index() -> str:
 @app.route("/scan_stream", methods=["POST"])
 def scan_stream() -> Response:
     form = request.form
-    workers = max(1, _as_int(form, "workers", 16))
-    top = max(1, _as_int(form, "top", 20))
+    workers = 16
     plot_days = max(60, _as_int(form, "plot_days", 260))
 
     try:
@@ -350,12 +348,6 @@ def scan_stream() -> Response:
                         yield json.dumps(
                             {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": tier_name}
                         ) + "\n"
-
-                        if found >= top:
-                            for pending in future_map:
-                                pending.cancel()
-                            yield json.dumps({"type": "done", "count": found, "tier": tier_name}) + "\n"
-                            return
 
                 if retry_symbols:
                     attempt += 1

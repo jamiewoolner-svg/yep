@@ -186,10 +186,6 @@
             <input name="symbols" value="{{ form_values.symbols }}">
           </div>
           <div>
-            <label>Top Results</label>
-            <input type="number" name="top" value="{{ form_values.top }}" min="1" max="500">
-          </div>
-          <div>
             <label>Chart Days</label>
             <input type="number" name="plot_days" value="{{ form_values.plot_days }}" min="60" max="1000">
           </div>
@@ -200,10 +196,6 @@
           <div>
             <label>Min Dollar Volume</label>
             <input type="number" name="min_dollar_volume" value="{{ form_values.min_dollar_volume }}" min="0" step="1000000">
-          </div>
-          <div>
-            <label>Workers</label>
-            <input type="number" name="workers" value="{{ form_values.workers }}" min="1" max="64">
           </div>
           <div>
             <label>Data Source</label>
@@ -222,18 +214,9 @@
           <div><label>Max RSI</label><input type="number" name="max_rsi" value="{{ form_values.max_rsi }}" step="0.1"></div>
           <div><label>Max StochRSI %K</label><input type="number" name="max_stoch_rsi_k" value="{{ form_values.max_stoch_rsi_k }}" step="0.1"></div>
           <div><label>Min ADX</label><input type="number" name="min_adx" value="{{ form_values.min_adx }}" step="0.1"></div>
-          <div>
-            <label>Signal Direction</label>
-            <select name="signal_direction">
-              <option value="both" {% if form_values.signal_direction == "both" %}selected{% endif %}>Both</option>
-              <option value="bull" {% if form_values.signal_direction == "bull" %}selected{% endif %}>Bullish</option>
-              <option value="bear" {% if form_values.signal_direction == "bear" %}selected{% endif %}>Bearish</option>
-            </select>
-          </div>
           <div><label>Cross Lookback</label><input type="number" name="cross_lookback" value="{{ form_values.cross_lookback }}" min="1" max="20"></div>
           <div><label>Band Touch Lookback</label><input type="number" name="band_touch_lookback" value="{{ form_values.band_touch_lookback }}" min="1" max="30"></div>
           <div><label>Min BB Expansion</label><input type="number" name="min_band_expansion" value="{{ form_values.min_band_expansion }}" step="0.01" min="0"></div>
-          <div><label>Intraday Interval (min)</label><input type="number" name="intraday_interval_min" value="{{ form_values.intraday_interval_min }}" min="1" max="60"></div>
           <div><label>Max Retries</label><input type="number" name="max_retries" value="{{ form_values.max_retries }}" min="0" max="10"></div>
           <div class="full checks">
             <label><input type="checkbox" name="use_sp500" {% if form_values.use_sp500 %}checked{% endif %}> Use S&P 500 universe</label>
@@ -302,6 +285,7 @@
 
     function addRow(row) {
       const tr = document.createElement('tr');
+      tr.dataset.score = String(row.score);
       tr.innerHTML = `
         <td>${row.symbol}</td>
         <td>${row.close.toFixed(2)}</td>
@@ -323,7 +307,18 @@
         <td>${row.dollar_volume}</td>
         <td>${row.score.toFixed(3)}</td>
       `;
-      resultsBody.appendChild(tr);
+      let inserted = false;
+      for (const existing of resultsBody.children) {
+        const existingScore = Number(existing.dataset.score || 0);
+        if (row.score > existingScore) {
+          resultsBody.insertBefore(tr, existing);
+          inserted = true;
+          break;
+        }
+      }
+      if (!inserted) {
+        resultsBody.appendChild(tr);
+      }
     }
 
     function addChart(chart, tier) {
