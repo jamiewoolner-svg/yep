@@ -1,0 +1,22 @@
+
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scanner Simple</title>
+<style>
+body{font-family:Arial,sans-serif;padding:16px} input,select{padding:6px;margin:4px} table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #ddd;padding:6px;font-size:13px;text-align:right} th:first-child,td:first-child{text-align:left}
+</style></head><body>
+<h2>Scanner Simple (No JS)</h2>
+<form method="post">
+<div><label>Symbols:</label><input name="symbols" value="AAPL,MSFT,NVDA,TSLA,AMZN,META" size="60"></div>
+<div><label><input type="checkbox" name="use_sp500" > Use S&P500</label></div>
+<div><label>Workers:</label><input name="workers" value="1" size="4">
+<label>Top:</label><input name="top" value="20" size="4"></div>
+<div><label>Data Source:</label>
+<select name="data_source"><option value="polygon">polygon</option><option value="auto">auto</option><option value="stooq">stooq</option></select>
+<label>Polygon API Key:</label><input name="polygon_api_key" size="40"></div>
+<div><button type="submit">Scan</button></div>
+</form>
+<p>Universe: 6 | Matches: 0 | Failures: 6</p>
+
+</body></html>

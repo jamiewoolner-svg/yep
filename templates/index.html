@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stock Scanner Web</title>
+  <script defer src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  <style>
+    :root {
+      --bg: #f3f5f7;
+      --card: #ffffff;
+      --ink: #10212b;
+      --muted: #4d6473;
+      --line: #d5dfe5;
+      --accent: #0b7fab;
+      --accent-2: #0f9d58;
+    }
+    body { margin: 0; font-family: "Avenir Next", "Segoe UI", sans-serif; color: var(--ink); background: radial-gradient(circle at 10% 10%, #e7f4fb 0, var(--bg) 35%), var(--bg); }
+    .wrap { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 28px rgba(16,33,43,0.06); padding: 16px; margin-bottom: 16px; }
+    h1 { margin: 0 0 10px; font-size: 24px; }
+    p { color: var(--muted); margin: 0 0 12px; }
+    .grid { display: grid; gap: 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .full { grid-column: 1 / -1; }
+    label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+    input[type="text"], input[type="number"] { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; }
+    .checks { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 4px; }
+    .checks label { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--ink); }
+    button { border: 0; border-radius: 10px; padding: 10px 14px; background: linear-gradient(120deg, var(--accent), #065d7d); color: white; font-weight: 700; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    .err { color: #9d1c1c; font-weight: 700; }
+    .status { font-weight: 700; color: var(--accent); margin-top: 10px; min-height: 20px; }
+    .metrics { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-top: 6px; }
+    .chart-box { height: 760px; margin-top: 10px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .chart-box { height: 620px; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Stock Scanner Web</h1>
+      <p>Scan for matching stocks and render indicator charts with crossing markers.</p>
+      <form id="scan-form" method="post">
+        <div class="grid">
+          <div class="full">
+            <label>Symbols (comma separated)</label>
+            <input name="symbols" value="{{ form_values.symbols }}">
+          </div>
+          <div>
+            <label>Top Results</label>
+            <input type="number" name="top" value="{{ form_values.top }}" min="1" max="500">
+          </div>
+          <div>
+            <label>Chart Days</label>
+            <input type="number" name="plot_days" value="{{ form_values.plot_days }}" min="60" max="1000">
+          </div>
+          <div>
+            <label>Chart Symbol (optional)</label>
+            <input name="chart_symbol" placeholder="Defaults to top match">
+          </div>
+          <div>
+            <label>Min Dollar Volume</label>
+            <input type="number" name="min_dollar_volume" value="{{ form_values.min_dollar_volume }}" min="0" step="1000000">
+          </div>
+          <div>
+            <label>Workers</label>
+            <input type="number" name="workers" value="{{ form_values.workers }}" min="1" max="64">
+          </div>
+          <div>
+            <label>Data Source</label>
+            <select name="data_source" style="width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px;">
+              <option value="polygon" {% if form_values.data_source == "polygon" %}selected{% endif %}>Polygon</option>
+              <option value="auto" {% if form_values.data_source == "auto" %}selected{% endif %}>Auto</option>
+              <option value="stooq" {% if form_values.data_source == "stooq" %}selected{% endif %}>Stooq</option>
+            </select>
+          </div>
+          <div>
+            <label>Polygon API Key</label>
+            <input type="text" name="polygon_api_key" value="{{ form_values.polygon_api_key }}" placeholder="paste key or use POLYGON_API_KEY env">
+          </div>
+          <div><label>Min Price</label><input type="number" name="min_price" value="{{ form_values.min_price }}" step="0.1"></div>
+          <div><label>Max Price</label><input type="number" name="max_price" value="{{ form_values.max_price }}" step="0.1"></div>
+          <div><label>Max RSI</label><input type="number" name="max_rsi" value="{{ form_values.max_rsi }}" step="0.1"></div>
+          <div><label>Max StochRSI %K</label><input type="number" name="max_stoch_rsi_k" value="{{ form_values.max_stoch_rsi_k }}" step="0.1"></div>
+          <div><label>Min ADX</label><input type="number" name="min_adx" value="{{ form_values.min_adx }}" step="0.1"></div>
+          <div>
+            <label>Signal Direction</label>
+            <select name="signal_direction" style="width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px;">
+              <option value="both" {% if form_values.signal_direction == "both" %}selected{% endif %}>Both</option>
+              <option value="bull" {% if form_values.signal_direction == "bull" %}selected{% endif %}>Bullish</option>
+              <option value="bear" {% if form_values.signal_direction == "bear" %}selected{% endif %}>Bearish</option>
+            </select>
+          </div>
+          <div><label>Cross Lookback</label><input type="number" name="cross_lookback" value="{{ form_values.cross_lookback }}" min="1" max="20"></div>
+          <div><label>Band Touch Lookback</label><input type="number" name="band_touch_lookback" value="{{ form_values.band_touch_lookback }}" min="1" max="30"></div>
+          <div><label>Min BB Expansion</label><input type="number" name="min_band_expansion" value="{{ form_values.min_band_expansion }}" step="0.01" min="0"></div>
+          <div><label>Intraday Interval (min)</label><input type="number" name="intraday_interval_min" value="{{ form_values.intraday_interval_min }}" min="1" max="60"></div>
+          <div><label>Max Retries</label><input type="number" name="max_retries" value="{{ form_values.max_retries }}" min="0" max="10"></div>
+          <div class="full checks">
+            <label><input type="checkbox" name="use_sp500" {% if form_values.use_sp500 %}checked{% endif %}> Use S&P 500 universe</label>
+            <label><input type="checkbox" name="pows" {% if form_values.pows %}checked{% endif %}> POWS preset</label>
+            <label><input type="checkbox" name="require_uptrend" {% if form_values.require_uptrend %}checked{% endif %}> Require uptrend</label>
+            <label><input type="checkbox" name="require_breakout" {% if form_values.require_breakout %}checked{% endif %}> Require breakout</label>
+            <label><input type="checkbox" name="require_macd_bull" {% if form_values.require_macd_bull %}checked{% endif %}> Require MACD bull</label>
+            <label><input type="checkbox" name="require_di_bull" {% if form_values.require_di_bull %}checked{% endif %}> Require +DI &gt; -DI</label>
+            <label><input type="checkbox" name="require_macd_stoch_cross" {% if form_values.require_macd_stoch_cross %}checked{% endif %}> Require MACD+Stoch cross</label>
+            <label><input type="checkbox" name="require_simultaneous_cross" {% if form_values.require_simultaneous_cross %}checked{% endif %}> Prefer same-bar cross</label>
+            <label><input type="checkbox" name="require_band_liftoff" {% if form_values.require_band_liftoff %}checked{% endif %}> Require BB liftoff</label>
+            <label><input type="checkbox" name="require_daily_and_233" {% if form_values.require_daily_and_233 %}checked{% endif %}> Require Daily + 233m</label>
+            <label><input type="checkbox" name="auto_fallback" {% if form_values.auto_fallback %}checked{% endif %}> Auto fallback (strict to loose)</label>
+            <label><input type="checkbox" name="no_skips" {% if form_values.no_skips %}checked{% endif %}> No skips (fail if unresolved)</label>
+          </div>
+        </div>
+        <div style="margin-top: 12px; display: flex; gap: 10px;">
+          <button type="submit" id="scan-btn">Run Scan</button>
+          <button type="button" id="stop-btn" style="background: #7a1f1f;">Stop</button>
+        </div>
+      </form>
+      <p class="status" id="scan-status"></p>
+      <div class="metrics">
+        <span id="m-tier">Tier: -</span>
+        <span id="m-scanned">Scanned: 0/0</span>
+        <span id="m-matches">Matches: 0</span>
+      </div>
+      {% if error %}<p class="err">{{ error }}</p>{% endif %}
+    </div>
+
+    <div class="card">
+      <h1>Matches</h1>
+      <table>
+        <thead>
+          <tr><th>Symbol</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>MACD Age Bear</th><th>Stoch Age Bear</th><th>BB Exp</th><th>$Vol20</th><th>Score</th></tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+      </table>
+      <p id="empty-note">No matches yet. Run a scan.</p>
+    </div>
+
+    <div class="card">
+      <h1>Charts</h1>
+      <div id="charts"></div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('scan-form');
+    const resultsBody = document.getElementById('results-body');
+    const emptyNote = document.getElementById('empty-note');
+    const charts = document.getElementById('charts');
+    const status = document.getElementById('scan-status');
+    const stopBtn = document.getElementById('stop-btn');
+    const scanBtn = document.getElementById('scan-btn');
+    const tierEl = document.getElementById('m-tier');
+    const scannedEl = document.getElementById('m-scanned');
+    const matchesEl = document.getElementById('m-matches');
+    let activeController = null;
+
+    function pick(idx, series) { return idx.map(i => series[i]); }
+
+    function addRow(row) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${row.symbol}</td>
+        <td>${row.close.toFixed(2)}</td>
+        <td>${row.sma50.toFixed(2)}</td>
+        <td>${row.sma89.toFixed(2)}</td>
+        <td>${row.sma200.toFixed(2)}</td>
+        <td>${row.stoch_k.toFixed(2)}</td>
+        <td>${row.macd_hist.toFixed(3)}</td>
+        <td>${row.adx.toFixed(2)}</td>
+        <td>${row.macd_cross_age}</td>
+        <td>${row.stoch_cross_age}</td>
+        <td>${row.macd_bear_cross_age}</td>
+        <td>${row.stoch_bear_cross_age}</td>
+        <td>${row.bb_expansion.toFixed(3)}</td>
+        <td>${row.dollar_volume}</td>
+        <td>${row.score.toFixed(3)}</td>
+      `;
+      resultsBody.appendChild(tr);
+    }
+
+    function addChart(chart, tier) {
+      if (typeof Plotly === 'undefined') {
+        status.textContent = 'Charts unavailable: Plotly CDN did not load.';
+        return;
+      }
+      const id = `chart-${chart.symbol}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      const block = document.createElement('div');
+      block.innerHTML = `<h3>${chart.symbol} (${tier})</h3><div id="${id}" class="chart-box"></div>`;
+      charts.appendChild(block);
+
+      const x = chart.dates;
+      const traces = [
+        {x, y: chart.close, name: 'Close', line: {color: '#1f77b4'}, xaxis: 'x', yaxis: 'y'},
+        {x, y: chart.sma50, name: 'SMA50', line: {color: '#ff7f0e'}, xaxis: 'x', yaxis: 'y'},
+        {x, y: chart.sma89, name: 'SMA89', line: {color: '#2ca02c'}, xaxis: 'x', yaxis: 'y'},
+        {x, y: chart.sma200, name: 'SMA200', line: {color: '#9467bd'}, xaxis: 'x', yaxis: 'y'},
+        {x, y: chart.bb_upper, name: 'BB Upper', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
+        {x, y: chart.bb_lower, name: 'BB Lower', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
+        {x: pick(chart.sma_cross_up_idx, x), y: pick(chart.sma_cross_up_idx, chart.close), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 8}, name: 'SMA Up', xaxis: 'x', yaxis: 'y'},
+        {x: pick(chart.sma_cross_down_idx, x), y: pick(chart.sma_cross_down_idx, chart.close), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 8}, name: 'SMA Down', xaxis: 'x', yaxis: 'y'},
+        {x, y: chart.macd, name: 'MACD', line: {color: '#17becf'}, xaxis: 'x2', yaxis: 'y2'},
+        {x, y: chart.macd_signal, name: 'Signal', line: {color: '#bcbd22'}, xaxis: 'x2', yaxis: 'y2'},
+        {x: pick(chart.macd_cross_up_idx, x), y: pick(chart.macd_cross_up_idx, chart.macd), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'MACD Up', xaxis: 'x2', yaxis: 'y2'},
+        {x: pick(chart.macd_cross_down_idx, x), y: pick(chart.macd_cross_down_idx, chart.macd), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'MACD Down', xaxis: 'x2', yaxis: 'y2'},
+        {x, y: chart.stoch_k, name: 'Stoch %K', line: {color: '#e377c2'}, xaxis: 'x3', yaxis: 'y3'},
+        {x, y: chart.stoch_d, name: 'Stoch %D', line: {color: '#8c564b'}, xaxis: 'x3', yaxis: 'y3'},
+        {x: pick(chart.stoch_cross_up_idx, x), y: pick(chart.stoch_cross_up_idx, chart.stoch_k), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'Stoch Up', xaxis: 'x3', yaxis: 'y3'},
+        {x: pick(chart.stoch_cross_down_idx, x), y: pick(chart.stoch_cross_down_idx, chart.stoch_k), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'Stoch Down', xaxis: 'x3', yaxis: 'y3'}
+      ];
+
+      Plotly.newPlot(id, traces, {
+        margin: {l: 50, r: 20, t: 20, b: 30},
+        paper_bgcolor: '#fff',
+        plot_bgcolor: '#fff',
+        legend: {orientation: 'h'},
+        grid: {rows: 3, columns: 1, pattern: 'independent', roworder: 'top to bottom'},
+        xaxis: {domain: [0, 1], anchor: 'y', showgrid: true, gridcolor: '#edf2f6'},
+        yaxis: {domain: [0.52, 1], title: 'Price', showgrid: true, gridcolor: '#edf2f6'},
+        xaxis2: {domain: [0, 1], anchor: 'y2', showgrid: true, gridcolor: '#edf2f6'},
+        yaxis2: {domain: [0.26, 0.48], title: 'MACD', showgrid: true, gridcolor: '#edf2f6', zeroline: true, zerolinecolor: '#999'},
+        xaxis3: {domain: [0, 1], anchor: 'y3', showgrid: true, gridcolor: '#edf2f6'},
+        yaxis3: {domain: [0, 0.22], title: 'StochRSI', range: [0, 100], showgrid: true, gridcolor: '#edf2f6', tickvals: [20, 50, 80]}
+      }, {responsive: true});
+    }
+
+    async function handleMessage(msg) {
+      if (msg.type === 'status' || msg.type === 'progress') {
+        status.textContent = msg.message;
+      } else if (msg.type === 'match') {
+        emptyNote.style.display = 'none';
+        addRow(msg.row);
+        addChart(msg.chart, msg.tier);
+        status.textContent = `Match: ${msg.row.symbol} (${msg.tier})`;
+      } else if (msg.type === 'error') {
+        status.textContent = `Error: ${msg.message}`;
+      } else if (msg.type === 'done') {
+        status.textContent = `Done. ${msg.count} match(es), tier: ${msg.tier}`;
+      } else if (msg.type === 'metrics') {
+        tierEl.textContent = `Tier: ${msg.tier}`;
+        scannedEl.textContent = `Scanned: ${msg.scanned}/${msg.total}`;
+        matchesEl.textContent = `Matches: ${msg.matches}`;
+      }
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      resultsBody.innerHTML = '';
+      charts.innerHTML = '';
+      emptyNote.style.display = 'block';
+      status.textContent = 'Starting strict scan...';
+      tierEl.textContent = 'Tier: init';
+      scannedEl.textContent = 'Scanned: 0/0';
+      matchesEl.textContent = 'Matches: 0';
+      scanBtn.disabled = true;
+
+      if (activeController) {
+        activeController.abort();
+      }
+      activeController = new AbortController();
+
+      try {
+        const resp = await fetch('/scan_stream', { method: 'POST', body: new FormData(form), signal: activeController.signal });
+        if (!resp.ok) {
+          status.textContent = `Error: request failed (${resp.status})`;
+          scanBtn.disabled = false;
+          return;
+        }
+
+        if (!resp.body || !resp.body.getReader) {
+          // Browser fallback: parse NDJSON after full response.
+          const text = await resp.text();
+          for (const line of text.split('\n')) {
+            if (!line.trim()) continue;
+            await handleMessage(JSON.parse(line));
+          }
+          scanBtn.disabled = false;
+          return;
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            await handleMessage(JSON.parse(line));
+          }
+        }
+      } catch (err) {
+        if (String(err).includes('AbortError')) {
+          status.textContent = 'Scan stopped.';
+        } else {
+          status.textContent = `Error: ${err}`;
+        }
+      } finally {
+        scanBtn.disabled = false;
+        activeController = null;
+      }
+    });
+
+    stopBtn.addEventListener('click', () => {
+      if (activeController) {
+        activeController.abort();
+      }
+    });
+  </script>
+</body>
+</html>
