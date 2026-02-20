@@ -532,6 +532,8 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
 
 def _strategy_args() -> SimpleNamespace:
     """Locked scanner profile: no UI tuning, fixed strategy rules."""
+    polygon_key = str(os.getenv("POLYGON_API_KEY", "")).strip()
+    default_source = str(os.getenv("SCANNER_DATA_SOURCE", "polygon" if polygon_key else "auto")).strip().lower() or "auto"
     return SimpleNamespace(
         min_price=5.0,
         max_price=1000.0,
@@ -578,8 +580,8 @@ def _strategy_args() -> SimpleNamespace:
         auto_fallback=True,
         no_skips=False,
         max_retries=4,
-        data_source="auto",
-        polygon_api_key="",
+        data_source=default_source,
+        polygon_api_key=polygon_key,
         pows=True,
         verbose=False,
     )
@@ -852,6 +854,31 @@ def _recent_lifecycle_window_ok(result: Any, window_bars: int) -> bool:
     return bool(band_recent and momentum_recent)
 
 
+def _passes_watchlist_loose(result: Any, args: SimpleNamespace) -> bool:
+    """Fallback inclusion path for live scans when strict filters are too sparse."""
+    if not result:
+        return False
+    close = float(getattr(result, "close", 0.0) or 0.0)
+    dollar_volume = float(getattr(result, "dollar_volume20", 0.0) or 0.0)
+    if close <= 0 or not (float(getattr(args, "min_price", 5.0)) <= close <= float(getattr(args, "max_price", 1000.0))):
+        return False
+    if dollar_volume < min(float(getattr(args, "min_dollar_volume", 2_000_000.0)), 800_000.0):
+        return False
+
+    recent_daily = int(getattr(args, "recent_daily_bars", 30) or 30)
+    if not _recent_lifecycle_window_ok(result, recent_daily):
+        return False
+
+    direction = str(getattr(result, "setup_direction", "bull")).lower()
+    if direction == "bear":
+        cross_age = min(int(getattr(result, "macd_bear_cross_age", 999)), int(getattr(result, "stoch_bear_cross_age", 999)))
+    else:
+        cross_age = min(int(getattr(result, "macd_cross_age", 999)), int(getattr(result, "stoch_cross_age", 999)))
+    near_cross = abs(float(getattr(result, "macd_gap_now", 0.0) or 0.0)) <= 0.15 or abs(float(getattr(result, "stoch_gap_now", 0.0) or 0.0)) <= 10.0
+    band_recent = int(getattr(result, "outer_touch_age", 999)) <= recent_daily
+    return bool(cross_age <= recent_daily or near_cross or band_recent)
+
+
 def _precision_entry_ok(intraday: list[Candle], daily: Any, args: SimpleNamespace) -> bool:
     # Course precision ladder: 21 (daily), 13 (233), 8/5 (55/34 style intraday refinement).
     direction = str(getattr(daily, "setup_direction", "bull")).lower()
@@ -880,7 +907,9 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
             daily = analyze_symbol(symbol)
             if not daily:
                 return None
-            if not passes_filters(daily, args):
+            strict_ok = passes_filters(daily, args)
+            loose_ok = bool(getattr(args, "allow_momentum_watchlist", False)) and _passes_watchlist_loose(daily, args)
+            if not (strict_ok or loose_ok):
                 return None
             lookback = max(4, int(getattr(args, "cross_lookback", 6)))
             gap_max = max(2, int(getattr(args, "triple_gap_max", 4)))
@@ -1027,8 +1056,15 @@ def scan_stream() -> Response:
     try:
         symbols = list(dict.fromkeys(fetch_sp500_symbols() + fetch_nasdaq100_symbols()))
     except Exception as exc:
-        payload = json.dumps({"type": "error", "message": str(exc)})
-        return Response(payload + "\n", mimetype="application/x-ndjson")
+        # Fallback to bundled symbols if remote universe sources are temporarily unavailable.
+        try:
+            symbols = load_symbols(None, "data/default_symbols.txt")
+            fallback_msg = f"Universe source unavailable ({exc}); using bundled default symbols ({len(symbols)})."
+        except Exception:
+            payload = json.dumps({"type": "error", "message": str(exc)})
+            return Response(payload + "\n", mimetype="application/x-ndjson")
+    else:
+        fallback_msg = ""
 
     base_args = _ranked_scan_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
@@ -1067,6 +1103,13 @@ def scan_stream() -> Response:
         found = 0
         total_symbols = len(symbols)
         yield json.dumps({"type": "status", "message": f"Universe size: {total_symbols} symbols"}) + "\n"
+        src = str(getattr(scan_args, "data_source", "auto")).lower()
+        key_present = bool(str(getattr(scan_args, "polygon_api_key", "")).strip() or os.getenv("POLYGON_API_KEY", "").strip())
+        yield json.dumps(
+            {"type": "status", "message": f"Data source: {src} | Polygon key: {'present' if key_present else 'missing'}"}
+        ) + "\n"
+        if fallback_msg:
+            yield json.dumps({"type": "status", "message": fallback_msg}) + "\n"
         m = date.today().month
         if m in (10, 11, 12, 1):
             season_mode = "Fall/Winter profile: Daily+233 with weekly context"
