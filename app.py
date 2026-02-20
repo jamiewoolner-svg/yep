@@ -112,6 +112,9 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "stoch_bear_cross_age": analyzed.stoch_bear_cross_age,
         "bb_expansion": _safe_num(analyzed.band_width_expansion, 3),
         "pre3x": _safe_num(max(analyzed.pre3x_bull_score, analyzed.pre3x_bear_score), 2),
+        "hist_n": int(getattr(analyzed, "hist_setups_5y", 0)),
+        "hist_wr": _safe_num(getattr(analyzed, "hist_win_rate_5y", 0.0) * 100.0, 1),
+        "hist_avg": _safe_num(getattr(analyzed, "hist_avg_return_5y", 0.0) * 100.0, 2),
         "dollar_volume": format_money(analyzed.dollar_volume20),
         "score": _safe_num(analyzed.score, 3),
     }

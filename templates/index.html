@@ -271,7 +271,7 @@
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Symbol</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>MACD Age Bear</th><th>Stoch Age Bear</th><th>BB Exp</th><th>Pre3x</th><th>$Vol20</th><th>Score</th></tr>
+            <tr><th>Symbol</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>MACD Age Bear</th><th>Stoch Age Bear</th><th>BB Exp</th><th>Pre3x</th><th>Hist N</th><th>Hist WR%</th><th>Hist Avg%</th><th>$Vol20</th><th>Score</th></tr>
           </thead>
           <tbody id="results-body"></tbody>
         </table>
@@ -317,6 +317,9 @@
         <td>${row.stoch_bear_cross_age}</td>
         <td>${row.bb_expansion.toFixed(3)}</td>
         <td>${row.pre3x.toFixed(2)}</td>
+        <td>${row.hist_n}</td>
+        <td>${row.hist_wr.toFixed(1)}</td>
+        <td>${row.hist_avg.toFixed(2)}</td>
         <td>${row.dollar_volume}</td>
         <td>${row.score.toFixed(3)}</td>
       `;

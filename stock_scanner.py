@@ -36,6 +36,7 @@ POWS_BB_STDDEV = 2.0
 POWS_SMA_FAST = 50
 POWS_SMA_MID = 89
 POWS_SMA_SLOW = 200
+HISTORICAL_LOOKBACK_YEARS = 5
 
 DATA_SOURCE = os.getenv("SCANNER_DATA_SOURCE", "auto")
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "")
@@ -88,6 +89,9 @@ class ScanResult:
     triple_bear_cross_gap: int
     pre3x_bull_score: float
     pre3x_bear_score: float
+    hist_setups_5y: int
+    hist_win_rate_5y: float
+    hist_avg_return_5y: float
     touched_outer_band_recent: bool
     outer_touch_age: int
     band_width_expansion: float
@@ -383,7 +387,7 @@ def _fetch_polygon_aggs(symbol: str, multiplier: int, timespan: str, date_from: 
     return candles
 
 
-def fetch_polygon_history(symbol: str, lookback_days: int = 1400) -> List[Candle]:
+def fetch_polygon_history(symbol: str, lookback_days: int = 2200) -> List[Candle]:
     end = datetime.utcnow().date()
     start = end - timedelta(days=max(lookback_days, 365))
     return _fetch_polygon_aggs(symbol, 1, "day", start.isoformat(), end.isoformat())
@@ -918,6 +922,82 @@ def adx(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float], 
     return adx_value, plus_di_list[-1], minus_di_list[-1]
 
 
+def historical_band_swing_metrics(
+    candles: Sequence[Candle], years: int = HISTORICAL_LOOKBACK_YEARS, horizon_bars: int = 15
+) -> tuple[int, float, float]:
+    if len(candles) < 260:
+        return 0, 0.0, 0.0
+
+    closes = [c.close for c in candles]
+    highs = [c.high for c in candles]
+    lows = [c.low for c in candles]
+    dates = [c.date for c in candles]
+    bb_mid_series = sma_series(closes, POWS_BB_LENGTH)
+    bb_std_series = rolling_stdev(closes, POWS_BB_LENGTH)
+    bb_upper_series = [m + POWS_BB_STDDEV * s if not (math.isnan(m) or math.isnan(s)) else math.nan for m, s in zip(bb_mid_series, bb_std_series)]
+    bb_lower_series = [m - POWS_BB_STDDEV * s if not (math.isnan(m) or math.isnan(s)) else math.nan for m, s in zip(bb_mid_series, bb_std_series)]
+
+    cutoff = dates[-1] - timedelta(days=365 * max(1, years))
+    start_idx = next((i for i, d in enumerate(dates) if d >= cutoff), 0)
+    start_idx = max(start_idx, POWS_BB_LENGTH + 2)
+    end_idx = len(candles) - max(2, horizon_bars + 1)
+    if end_idx <= start_idx:
+        return 0, 0.0, 0.0
+
+    setups = 0
+    wins = 0
+    returns: List[float] = []
+
+    for i in range(start_idx, end_idx):
+        bb_mid = bb_mid_series[i]
+        bb_up = bb_upper_series[i]
+        bb_lo = bb_lower_series[i]
+        if math.isnan(bb_mid) or math.isnan(bb_up) or math.isnan(bb_lo):
+            continue
+
+        bullish = lows[i] <= bb_lo and closes[i] > bb_lo and closes[i] > closes[i - 1]
+        bearish = highs[i] >= bb_up and closes[i] < bb_up and closes[i] < closes[i - 1]
+        if not (bullish or bearish):
+            continue
+
+        direction = 1.0 if bullish else -1.0
+        setups += 1
+        entry = closes[i]
+        target = bb_mid
+        stop = lows[i] if bullish else highs[i]
+        outcome = 0
+        j_hit = min(len(candles) - 1, i + horizon_bars)
+
+        for j in range(i + 1, j_hit + 1):
+            hit_target = highs[j] >= target if bullish else lows[j] <= target
+            hit_stop = lows[j] <= stop if bullish else highs[j] >= stop
+            if hit_target and hit_stop:
+                outcome = 0
+                break
+            if hit_target:
+                outcome = 1
+                wins += 1
+                break
+            if hit_stop:
+                outcome = -1
+                break
+
+        if outcome == 1:
+            realized = abs((target - entry) / entry)
+        elif outcome == -1:
+            realized = -abs((entry - stop) / entry)
+        else:
+            terminal = closes[j_hit]
+            realized = ((terminal - entry) / entry) * direction
+        returns.append(realized)
+
+    if setups == 0:
+        return 0, 0.0, 0.0
+    win_rate = wins / setups
+    avg_ret = statistics.fmean(returns) if returns else 0.0
+    return setups, win_rate, avg_ret
+
+
 def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D") -> ScanResult | None:
     if len(candles) < 120:
         return None
@@ -1053,6 +1133,7 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         + (1.0 if band_width_expansion >= 0 else 0.0)
         + (1.0 if close <= bb_mid else 0.0)
     )
+    hist_setups_5y, hist_win_rate_5y, hist_avg_return_5y = historical_band_swing_metrics(candles, years=HISTORICAL_LOOKBACK_YEARS)
 
     # Composite ranking: trend, liquidity, and moderate RSI preferred.
     trend_component = (close / sma20) + (sma20 / sma50)
@@ -1074,6 +1155,9 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         + stoch_component
         + max(bull_cross_component, bear_cross_component)
         + max(liftoff_component, rejection_component)
+        + min(1.0, hist_setups_5y / 40.0)
+        + (hist_win_rate_5y - 0.5)
+        + (hist_avg_return_5y * 10.0)
     )
 
     return ScanResult(
@@ -1109,6 +1193,9 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         triple_bear_cross_gap=triple_bear_cross_gap,
         pre3x_bull_score=pre3x_bull_score,
         pre3x_bear_score=pre3x_bear_score,
+        hist_setups_5y=hist_setups_5y,
+        hist_win_rate_5y=hist_win_rate_5y,
+        hist_avg_return_5y=hist_avg_return_5y,
         touched_outer_band_recent=touched_outer_band_recent,
         outer_touch_age=outer_touch_age,
         band_width_expansion=band_width_expansion,
