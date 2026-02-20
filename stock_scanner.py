@@ -85,6 +85,8 @@ class ScanResult:
     stoch_rsi_d: float
     macd: float
     macd_signal: float
+    macd_gap_now: float
+    macd_gap_prev: float
     adx14: float
     plus_di14: float
     minus_di14: float
@@ -114,6 +116,7 @@ class ScanResult:
     rr_mid: float
     options_setup_score: float
     course_pattern_score: float
+    bb_compression_score: float
     touched_outer_band_recent: bool
     outer_touch_age: int
     band_width_expansion: float
@@ -232,6 +235,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=4,
         help="Bars back allowed for directional MACD/Stoch crosses.",
+    )
+    parser.add_argument(
+        "--max-macd-cross-age",
+        type=int,
+        default=3,
+        help="Require MACD cross within this many bars, or imminently approaching within this window.",
     )
     parser.add_argument(
         "--band-touch-lookback",
@@ -1366,6 +1375,18 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     band_width_expansion = 0.0
     if not math.isnan(bw_now) and not math.isnan(prior_bw) and prior_bw > 0:
         band_width_expansion = (bw_now - prior_bw) / prior_bw
+    bw_recent = [
+        (bb_upper_series[i] - bb_lower_series[i]) / bb_mid_series[i]
+        for i in range(max(0, len(closes) - 50), len(closes))
+        if (
+            i < len(bb_mid_series)
+            and not math.isnan(bb_upper_series[i])
+            and not math.isnan(bb_lower_series[i])
+            and not math.isnan(bb_mid_series[i])
+            and bb_mid_series[i] != 0
+        )
+    ]
+    bw_median = statistics.median(bw_recent) if bw_recent else math.nan
 
     def _prox(gap: float, scale: float) -> float:
         if math.isnan(gap) or scale <= 0:
@@ -1459,6 +1480,9 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         + 10.0 * rr_quality
         + 10.0 * liq_quality
     )
+    bb_compression_score = 0.0
+    if not math.isnan(bw_now) and not math.isnan(bw_median) and bw_median > 0:
+        bb_compression_score = _clamp01((bw_median - bw_now) / bw_median)
 
     # Course-aligned signal quality score (0-100): trend + fresh momentum + BB behavior.
     if setup_direction == "bull":
@@ -1527,6 +1551,8 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         stoch_rsi_d=stoch_rsi_d,
         macd=macd_line,
         macd_signal=macd_signal,
+        macd_gap_now=macd_gap_now,
+        macd_gap_prev=macd_gap_prev,
         adx14=adx14,
         plus_di14=plus_di14,
         minus_di14=minus_di14,
@@ -1556,6 +1582,7 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         rr_mid=rr_mid,
         options_setup_score=options_setup_score,
         course_pattern_score=course_pattern_score,
+        bb_compression_score=bb_compression_score,
         touched_outer_band_recent=touched_outer_band_recent,
         outer_touch_age=outer_touch_age,
         band_width_expansion=band_width_expansion,
@@ -1592,6 +1619,7 @@ def _passes_directional_setup(
     require_band_liftoff = args.require_band_liftoff
     bb_spread_watchlist = getattr(args, "bb_spread_watchlist", False)
     require_simultaneous_cross = args.require_simultaneous_cross
+    max_macd_cross_age = max(1, int(getattr(args, "max_macd_cross_age", 3)))
     want_bull, want_bear = _direction_match(result, args)
 
     bull_ok = True
@@ -1633,6 +1661,23 @@ def _passes_directional_setup(
     if require_simultaneous_cross:
         bull_ok = bull_ok and (result.dual_cross_gap <= 1)
         bear_ok = bear_ok and (result.dual_bear_cross_gap <= 1)
+
+    # Core timing rule: MACD cross must be recent or imminently approaching within 3 bars.
+    macd_gap_thresh = max(0.03, abs(result.macd_signal) * 0.25)
+    bull_macd_imminent = (
+        result.macd <= result.macd_signal
+        and result.macd_gap_prev < 0
+        and result.macd_gap_now > result.macd_gap_prev
+        and abs(result.macd_gap_now) <= macd_gap_thresh
+    )
+    bear_macd_imminent = (
+        result.macd >= result.macd_signal
+        and result.macd_gap_prev > 0
+        and result.macd_gap_now < result.macd_gap_prev
+        and abs(result.macd_gap_now) <= macd_gap_thresh
+    )
+    bull_ok = bull_ok and (result.macd_cross_age <= max_macd_cross_age or bull_macd_imminent)
+    bear_ok = bear_ok and (result.macd_bear_cross_age <= max_macd_cross_age or bear_macd_imminent)
 
     # Pre-liftoff discovery path for setups that can evolve into 3x confirmation.
     spread_floor = max(0.0, args.min_band_expansion)

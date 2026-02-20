@@ -369,6 +369,7 @@ def _build_args(form: Any) -> SimpleNamespace:
         bb_spread_watchlist=(form.get("bb_spread_watchlist") == "on"),
         signal_direction="both",
         cross_lookback=_as_int(form, "cross_lookback", 4),
+        max_macd_cross_age=_as_int(form, "max_macd_cross_age", 3),
         band_touch_lookback=_as_int(form, "band_touch_lookback", 6),
         min_band_expansion=_as_float(form, "min_band_expansion", 0.05),
         min_course_pattern_score=_as_float(form, "min_course_pattern_score", 55.0),
@@ -522,6 +523,7 @@ def _strategy_args() -> SimpleNamespace:
         bb_spread_watchlist=True,
         signal_direction="both",
         cross_lookback=6,
+        max_macd_cross_age=3,
         triple_gap_max=6,
         band_touch_lookback=8,
         min_band_expansion=0.03,
@@ -634,13 +636,14 @@ def _ranked_scan_args() -> SimpleNamespace:
     args.require_precision_entry = False
     args.require_secondary_confirmation = False
     args.scan_intraday_3x = True
+    args.max_macd_cross_age = min(int(getattr(args, "max_macd_cross_age", 3)), 3)
     args.cross_lookback = max(args.cross_lookback, 14)
     args.triple_gap_max = 12
     args.min_adx = min(args.min_adx, 3.0)
     args.max_rsi = max(args.max_rsi, 95.0)
     args.max_stoch_rsi_k = max(args.max_stoch_rsi_k, 95.0)
     args.min_dollar_volume = min(args.min_dollar_volume, 1_000_000.0)
-    args.min_band_expansion = max(args.min_band_expansion, 0.08)
+    args.min_band_expansion = max(args.min_band_expansion, 0.10)
     args.band_touch_lookback = min(args.band_touch_lookback, 3)
     args.min_course_pattern_score = max(float(getattr(args, "min_course_pattern_score", 55.0)), 62.0)
 
