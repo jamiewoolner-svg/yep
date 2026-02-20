@@ -77,39 +77,6 @@
     h2 { margin: 0 0 12px; font-size: 20px; line-height: 1.2; }
     h3 { margin: 12px 0 8px; font-size: 16px; line-height: 1.2; color: var(--ink); }
     p { color: var(--muted); margin: 0 0 12px; }
-    .grid { display: grid; gap: 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
-    .full { grid-column: 1 / -1; }
-    label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 5px; font-weight: 600; letter-spacing: 0.02em; }
-    input[type="text"], input[type="number"], select {
-      width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 9px 10px;
-      font: inherit;
-      color: var(--ink);
-      background: #14222f;
-      transition: border-color 0.15s ease, box-shadow 0.15s ease;
-    }
-    input:focus, select:focus {
-      outline: 0;
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(47, 164, 213, 0.22);
-    }
-    .checks { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
-    .checks label {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      margin: 0;
-      font-size: 13px;
-      color: var(--ink);
-      background: #152432;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-weight: 500;
-    }
-    .checks input[type="checkbox"] { margin: 0; }
     .actions { margin-top: 12px; display: flex; gap: 10px; }
     button {
       border: 0;
@@ -124,7 +91,6 @@
     }
     button:hover { transform: translateY(-1px); }
     button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
-    #stop-btn { background: linear-gradient(125deg, var(--danger), #621313); }
     .status {
       font-weight: 700;
       color: var(--accent-dark);
@@ -155,13 +121,11 @@
     @media (max-width: 900px) {
       .wrap { margin-top: 16px; }
       h1 { font-size: 24px; }
-      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .chart-box { height: 620px; }
       .card { padding: 14px; border-radius: 14px; }
       .brand { flex-direction: column; align-items: flex-start; }
     }
     @media (max-width: 600px) {
-      .grid { grid-template-columns: 1fr; }
       .actions { flex-direction: column; }
       button { width: 100%; }
     }
@@ -178,66 +142,10 @@
     </div>
     <div class="card">
       <h1>YEPSTOCKS</h1>
-      <p>Scan for matching stocks and render indicator charts with crossing markers.</p>
+      <p>One-button POWS scan across S&amp;P 500 + Nasdaq-100 using fixed house rules.</p>
       <form id="scan-form" method="post">
-        <div class="grid">
-          <div class="full">
-            <label>Symbols (comma separated)</label>
-            <input name="symbols" value="{{ form_values.symbols }}">
-          </div>
-          <div>
-            <label>Chart Days</label>
-            <input type="number" name="plot_days" value="{{ form_values.plot_days }}" min="60" max="1000">
-          </div>
-          <div>
-            <label>Chart Symbol (optional)</label>
-            <input name="chart_symbol" placeholder="Defaults to top match">
-          </div>
-          <div>
-            <label>Min Dollar Volume</label>
-            <input type="number" name="min_dollar_volume" value="{{ form_values.min_dollar_volume }}" min="0" step="1000000">
-          </div>
-          <div>
-            <label>Data Source</label>
-            <select name="data_source">
-              <option value="polygon" {% if form_values.data_source == "polygon" %}selected{% endif %}>Polygon</option>
-              <option value="auto" {% if form_values.data_source == "auto" %}selected{% endif %}>Auto</option>
-              <option value="stooq" {% if form_values.data_source == "stooq" %}selected{% endif %}>Stooq</option>
-            </select>
-          </div>
-          <div>
-            <label>Polygon API Key</label>
-            <input type="text" name="polygon_api_key" value="{{ form_values.polygon_api_key }}" placeholder="paste key or use POLYGON_API_KEY env">
-          </div>
-          <div><label>Min Price</label><input type="number" name="min_price" value="{{ form_values.min_price }}" step="0.1"></div>
-          <div><label>Max Price</label><input type="number" name="max_price" value="{{ form_values.max_price }}" step="0.1"></div>
-          <div><label>Max RSI</label><input type="number" name="max_rsi" value="{{ form_values.max_rsi }}" step="0.1"></div>
-          <div><label>Max StochRSI %K</label><input type="number" name="max_stoch_rsi_k" value="{{ form_values.max_stoch_rsi_k }}" step="0.1"></div>
-          <div><label>Min ADX</label><input type="number" name="min_adx" value="{{ form_values.min_adx }}" step="0.1"></div>
-          <div><label>Cross Lookback</label><input type="number" name="cross_lookback" value="{{ form_values.cross_lookback }}" min="1" max="20"></div>
-          <div><label>Band Touch Lookback</label><input type="number" name="band_touch_lookback" value="{{ form_values.band_touch_lookback }}" min="1" max="30"></div>
-          <div><label>Min BB Expansion</label><input type="number" name="min_band_expansion" value="{{ form_values.min_band_expansion }}" step="0.01" min="0"></div>
-          <div><label>Max Retries</label><input type="number" name="max_retries" value="{{ form_values.max_retries }}" min="0" max="10"></div>
-          <div class="full checks">
-            <label><input type="checkbox" name="use_sp500" {% if form_values.use_sp500 %}checked{% endif %}> Use S&P 500 universe</label>
-            <label><input type="checkbox" name="use_qqq" {% if form_values.use_qqq %}checked{% endif %}> Use QQQ (Nasdaq-100)</label>
-            <label><input type="checkbox" name="pows" {% if form_values.pows %}checked{% endif %}> POWS preset</label>
-            <label><input type="checkbox" name="require_uptrend" {% if form_values.require_uptrend %}checked{% endif %}> Require uptrend</label>
-            <label><input type="checkbox" name="require_breakout" {% if form_values.require_breakout %}checked{% endif %}> Require breakout</label>
-            <label><input type="checkbox" name="require_macd_bull" {% if form_values.require_macd_bull %}checked{% endif %}> Require MACD bull</label>
-            <label><input type="checkbox" name="require_di_bull" {% if form_values.require_di_bull %}checked{% endif %}> Require +DI &gt; -DI</label>
-            <label><input type="checkbox" name="require_macd_stoch_cross" {% if form_values.require_macd_stoch_cross %}checked{% endif %}> Require MACD+Stoch cross</label>
-            <label><input type="checkbox" name="require_simultaneous_cross" {% if form_values.require_simultaneous_cross %}checked{% endif %}> Prefer same-bar cross</label>
-            <label><input type="checkbox" name="require_band_liftoff" {% if form_values.require_band_liftoff %}checked{% endif %}> Require BB liftoff</label>
-            <label><input type="checkbox" name="bb_spread_watchlist" {% if form_values.bb_spread_watchlist %}checked{% endif %}> BB spread watchlist</label>
-            <label><input type="checkbox" name="require_daily_and_233" {% if form_values.require_daily_and_233 %}checked{% endif %}> Require Daily + 233m</label>
-            <label><input type="checkbox" name="auto_fallback" {% if form_values.auto_fallback %}checked{% endif %}> Auto fallback (strict to loose)</label>
-            <label><input type="checkbox" name="no_skips" {% if form_values.no_skips %}checked{% endif %}> No skips (fail if unresolved)</label>
-          </div>
-        </div>
         <div class="actions">
-          <button type="submit" id="scan-btn">Run Scan</button>
-          <button type="button" id="stop-btn">Stop</button>
+          <button type="submit" id="scan-btn">Run POWS Scan</button>
         </div>
       </form>
       <p class="status" id="scan-status"></p>
@@ -254,7 +162,7 @@
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Symbol</th><th>Dir</th><th>Setup</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>MACD Age Bear</th><th>Stoch Age Bear</th><th>BB Exp</th><th>Pre3x</th><th>Hist N</th><th>Hist WR%</th><th>Hist Avg%</th><th>Tgt Mid%</th><th>Tgt Band%</th><th>Risk%</th><th>RR Mid</th><th>OptScore</th><th>$Vol20</th><th>Score</th></tr>
+            <tr><th>Symbol</th><th>Dir</th><th>Setup</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>BB Exp</th><th>Pre3x</th><th>Hist N</th><th>Hist WR%</th><th>Hist Avg%</th><th>Tgt Mid%</th><th>Tgt Band%</th><th>Risk%</th><th>RR Mid</th><th>SetupScore</th><th>$Vol20</th></tr>
           </thead>
           <tbody id="results-body"></tbody>
         </table>
@@ -274,7 +182,6 @@
     const emptyNote = document.getElementById('empty-note');
     const charts = document.getElementById('charts');
     const status = document.getElementById('scan-status');
-    const stopBtn = document.getElementById('stop-btn');
     const scanBtn = document.getElementById('scan-btn');
     const tierEl = document.getElementById('m-tier');
     const scannedEl = document.getElementById('m-scanned');
@@ -285,7 +192,7 @@
 
     function addRow(row) {
       const tr = document.createElement('tr');
-      tr.dataset.score = String(row.opt_score);
+      tr.dataset.score = String(row.setup_score);
       tr.innerHTML = `
         <td>${row.symbol}</td>
         <td>${row.dir}</td>
@@ -299,8 +206,6 @@
         <td>${row.adx.toFixed(2)}</td>
         <td>${row.macd_cross_age}</td>
         <td>${row.stoch_cross_age}</td>
-        <td>${row.macd_bear_cross_age}</td>
-        <td>${row.stoch_bear_cross_age}</td>
         <td>${row.bb_expansion.toFixed(3)}</td>
         <td>${row.pre3x.toFixed(2)}</td>
         <td>${row.hist_n}</td>
@@ -310,14 +215,13 @@
         <td>${row.tgt_band.toFixed(2)}</td>
         <td>${row.risk.toFixed(2)}</td>
         <td>${row.rr.toFixed(2)}</td>
-        <td>${row.opt_score.toFixed(1)}</td>
+        <td>${row.setup_score.toFixed(1)}</td>
         <td>${row.dollar_volume}</td>
-        <td>${row.score.toFixed(3)}</td>
       `;
       let inserted = false;
       for (const existing of resultsBody.children) {
         const existingScore = Number(existing.dataset.score || 0);
-        if (row.opt_score > existingScore) {
+        if (row.setup_score > existingScore) {
           resultsBody.insertBefore(tr, existing);
           inserted = true;
           break;
@@ -398,7 +302,7 @@
       resultsBody.innerHTML = '';
       charts.innerHTML = '';
       emptyNote.style.display = 'block';
-      status.textContent = 'Starting strict scan...';
+      status.textContent = 'Starting POWS scan...';
       tierEl.textContent = 'Tier: init';
       scannedEl.textContent = 'Scanned: 0/0';
       matchesEl.textContent = 'Matches: 0';
@@ -456,11 +360,6 @@
       }
     });
 
-    stopBtn.addEventListener('click', () => {
-      if (activeController) {
-        activeController.abort();
-      }
-    });
   </script>
 </body>
 </html>

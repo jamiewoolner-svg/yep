@@ -121,10 +121,43 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "tgt_band": _safe_num(getattr(analyzed, "target_band_pct", 0.0) * 100.0, 2),
         "risk": _safe_num(getattr(analyzed, "risk_pct", 0.0) * 100.0, 2),
         "rr": _safe_num(getattr(analyzed, "rr_mid", 0.0), 2),
-        "opt_score": _safe_num(getattr(analyzed, "options_setup_score", 0.0), 1),
+        "setup_score": _safe_num(getattr(analyzed, "options_setup_score", 0.0), 1),
         "dollar_volume": format_money(analyzed.dollar_volume20),
         "score": _safe_num(analyzed.score, 3),
     }
+
+
+def _pows_args() -> SimpleNamespace:
+    """Locked scanner profile: no UI tuning, fixed POWS-oriented rules."""
+    return SimpleNamespace(
+        min_price=5.0,
+        max_price=1000.0,
+        min_dollar_volume=2_000_000.0,
+        max_rsi=85.0,
+        max_stoch_rsi_k=95.0,
+        min_adx=8.0,
+        require_uptrend=False,
+        require_breakout=False,
+        require_macd_bull=False,
+        require_di_bull=False,
+        require_macd_stoch_cross=True,
+        require_simultaneous_cross=False,
+        require_band_liftoff=True,
+        bb_spread_watchlist=True,
+        signal_direction="both",
+        cross_lookback=6,
+        band_touch_lookback=8,
+        min_band_expansion=0.03,
+        require_daily_and_233=False,
+        intraday_interval_min=5,
+        auto_fallback=True,
+        no_skips=False,
+        max_retries=4,
+        data_source="auto",
+        polygon_api_key="",
+        pows=True,
+        verbose=False,
+    )
 
 
 def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, SimpleNamespace]]:
@@ -140,30 +173,27 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     strict.min_band_expansion = max(strict.min_band_expansion, 0.03)
     strict.min_adx = max(strict.min_adx, 10.0)
 
-    medium = copy.deepcopy(strict)
-    medium.require_simultaneous_cross = False
-    medium.require_daily_and_233 = False
-    medium.require_band_liftoff = False
-    medium.bb_spread_watchlist = True
-    medium.cross_lookback = max(medium.cross_lookback, 7)
-    medium.band_touch_lookback = max(medium.band_touch_lookback, 10)
-    medium.min_band_expansion = min(medium.min_band_expansion, 0.01)
-    medium.min_adx = min(medium.min_adx, 8.0)
+    confirm = copy.deepcopy(strict)
+    confirm.require_simultaneous_cross = False
+    confirm.require_daily_and_233 = False
+    confirm.require_band_liftoff = False
+    confirm.bb_spread_watchlist = True
+    confirm.cross_lookback = max(confirm.cross_lookback, 7)
+    confirm.band_touch_lookback = max(confirm.band_touch_lookback, 10)
+    confirm.min_band_expansion = min(confirm.min_band_expansion, 0.01)
+    confirm.min_adx = min(confirm.min_adx, 8.0)
 
-    loose = copy.deepcopy(medium)
-    loose.pows = False
-    loose.require_macd_stoch_cross = False
-    loose.require_band_liftoff = False
-    loose.bb_spread_watchlist = True
-    loose.require_uptrend = False
-    loose.require_macd_bull = False
-    loose.require_di_bull = False
-    loose.cross_lookback = max(loose.cross_lookback, 10)
-    loose.band_touch_lookback = max(loose.band_touch_lookback, 12)
-    loose.min_band_expansion = min(loose.min_band_expansion, 0.0)
-    loose.min_adx = min(loose.min_adx, 5.0)
+    developing = copy.deepcopy(confirm)
+    developing.pows = True
+    developing.require_macd_stoch_cross = False
+    developing.require_band_liftoff = False
+    developing.bb_spread_watchlist = True
+    developing.cross_lookback = max(developing.cross_lookback, 10)
+    developing.band_touch_lookback = max(developing.band_touch_lookback, 12)
+    developing.min_band_expansion = min(developing.min_band_expansion, 0.0)
+    developing.min_adx = min(developing.min_adx, 6.0)
 
-    return [("strict", strict), ("medium", medium), ("loose", loose)]
+    return [("pows_strict", strict), ("pows_confirm", confirm), ("pows_developing", developing)]
 
 
 def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
@@ -242,67 +272,24 @@ def build_chart_payload(symbol: str, days: int) -> dict[str, Any]:
 
 @app.route("/", methods=["GET", "POST"])
 def index() -> str:
-    form_values = {
-        "symbols": "AAPL,MSFT,NVDA,TSLA,AMZN,META",
-        "use_sp500": False,
-        "use_qqq": False,
-        "pows": True,
-        "plot_days": 260,
-        "min_price": 5.0,
-        "max_price": 1000.0,
-        "min_dollar_volume": 2_000_000.0,
-        "max_rsi": 80.0,
-        "max_stoch_rsi_k": 95.0,
-        "min_adx": 10.0,
-        "require_uptrend": False,
-        "require_breakout": False,
-        "require_macd_bull": False,
-        "require_di_bull": False,
-        "require_macd_stoch_cross": True,
-        "require_simultaneous_cross": False,
-        "require_band_liftoff": True,
-        "bb_spread_watchlist": True,
-        "signal_direction": "both",
-        "cross_lookback": 5,
-        "band_touch_lookback": 8,
-        "min_band_expansion": 0.03,
-        "require_daily_and_233": False,
-        "intraday_interval_min": 5,
-        "auto_fallback": True,
-        "no_skips": False,
-        "max_retries": 4,
-        "data_source": "auto",
-        "polygon_api_key": "",
-        "workers": 16,
-    }
     fallback_error = ""
     if request.method == "POST":
         fallback_error = "Browser script did not start scan. Please reload and try again."
-    return render_template("index.html", error=fallback_error, results=[], chart_payload=None, form_values=form_values)
+    return render_template("index.html", error=fallback_error, results=[], chart_payload=None, form_values={})
 
 
 @app.route("/scan_stream", methods=["POST"])
 def scan_stream() -> Response:
-    form = request.form
     workers = 16
-    plot_days = max(60, _as_int(form, "plot_days", 260))
+    plot_days = 260
 
     try:
-        use_sp500 = form.get("use_sp500") == "on"
-        use_qqq = form.get("use_qqq") == "on"
-        if use_sp500 and use_qqq:
-            symbols = list(dict.fromkeys(fetch_sp500_symbols() + fetch_nasdaq100_symbols()))
-        elif use_sp500:
-            symbols = fetch_sp500_symbols()
-        elif use_qqq:
-            symbols = fetch_nasdaq100_symbols()
-        else:
-            symbols = load_symbols(form.get("symbols", ""), "data/default_symbols.txt")
+        symbols = list(dict.fromkeys(fetch_sp500_symbols() + fetch_nasdaq100_symbols()))
     except Exception as exc:
         payload = json.dumps({"type": "error", "message": str(exc)})
         return Response(payload + "\n", mimetype="application/x-ndjson")
 
-    base_args = _build_args(form)
+    base_args = _pows_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = max(0, int(base_args.max_retries))
     tiers = _strict_fallback_tiers(base_args) if base_args.auto_fallback else [("strict", base_args)]
