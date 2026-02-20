@@ -450,7 +450,6 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
     raw_bb_expansion = float(getattr(analyzed, "band_width_expansion", 0.0) or 0.0)
     raw_pattern_similarity = float(getattr(analyzed, "pattern_similarity", 0.0) or 0.0)
     raw_pattern_direct = float(getattr(analyzed, "pattern_similarity_direct", 0.0) or 0.0)
-    raw_pattern_inverse = float(getattr(analyzed, "pattern_similarity_inverse", 0.0) or 0.0)
     rank_score = (
         (raw_setup_score * 1000.0)
         + (raw_score * 10.0)
@@ -493,9 +492,8 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "raw_bb_expansion": raw_bb_expansion,
         "pattern_similarity": _safe_num(raw_pattern_similarity * 100.0, 1),
         "raw_pattern_similarity": raw_pattern_similarity,
-        "pattern_mode": str(getattr(analyzed, "pattern_mode", "direct")),
+        "pattern_mode": str(getattr(analyzed, "setup_direction", "n/a")).upper(),
         "pattern_direct": _safe_num(raw_pattern_direct * 100.0, 1),
-        "pattern_inverse": _safe_num(raw_pattern_inverse * 100.0, 1),
         "rank_score": rank_score,
     }
 
@@ -680,31 +678,6 @@ def _pattern_similarity(reference: Any, candidate: Any) -> float:
         + 0.12 * _sim_by_distance(float(reference.adx14), float(candidate.adx14), 14.0)
         + 0.10 * _sim_by_distance(float(reference.target_mid_pct), float(candidate.target_mid_pct), 0.03)
         + 0.04 * (1.0 if ref_direction and ref_direction == cand_direction else 0.0)
-    )
-    return _clamp01(similarity)
-
-
-def _inverse_pattern_similarity(reference: Any, candidate: Any) -> float:
-    if not reference or not candidate:
-        return 0.0
-    ref_macd_hist = float(reference.macd - reference.macd_signal)
-    cand_macd_hist = float(candidate.macd - candidate.macd_signal)
-    ref_pre3x = float(max(reference.pre3x_bull_score, reference.pre3x_bear_score))
-    cand_pre3x = float(max(candidate.pre3x_bull_score, candidate.pre3x_bear_score))
-    ref_direction = str(getattr(reference, "setup_direction", ""))
-    cand_direction = str(getattr(candidate, "setup_direction", ""))
-    ref_stoch = float(reference.stoch_rsi_k)
-    cand_stoch = float(candidate.stoch_rsi_k)
-
-    # Inverse pattern: momentum and oscillator mirror the reference, while spread/quality can stay similar.
-    similarity = (
-        0.24 * _sim_by_distance(float(reference.band_width_expansion), float(candidate.band_width_expansion), 0.18)
-        + 0.16 * _sim_by_distance(ref_pre3x, cand_pre3x, 3.0)
-        + 0.22 * _sim_by_distance(-ref_macd_hist, cand_macd_hist, 0.45)
-        + 0.14 * _sim_by_distance(100.0 - ref_stoch, cand_stoch, 26.0)
-        + 0.10 * _sim_by_distance(float(reference.adx14), float(candidate.adx14), 14.0)
-        + 0.10 * _sim_by_distance(float(reference.target_mid_pct), float(candidate.target_mid_pct), 0.03)
-        + 0.04 * (1.0 if ref_direction and cand_direction and ref_direction != cand_direction else 0.0)
     )
     return _clamp01(similarity)
 
@@ -1003,11 +976,9 @@ def scan_stream() -> Response:
 
                     if reference_pattern:
                         direct_similarity = _pattern_similarity(reference_pattern, analyzed)
-                        inverse_similarity = _inverse_pattern_similarity(reference_pattern, analyzed)
                         setattr(analyzed, "pattern_similarity_direct", direct_similarity)
-                        setattr(analyzed, "pattern_similarity_inverse", inverse_similarity)
-                        setattr(analyzed, "pattern_similarity", max(direct_similarity, inverse_similarity))
-                        setattr(analyzed, "pattern_mode", "inverse" if inverse_similarity > direct_similarity else "direct")
+                        setattr(analyzed, "pattern_similarity", direct_similarity)
+                        setattr(analyzed, "pattern_mode", str(getattr(analyzed, "setup_direction", "n/a")).upper())
 
                     found += 1
                     row = _result_row(analyzed)

@@ -195,7 +195,7 @@
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Symbol</th><th>Dir</th><th>Setup</th><th>Pattern%</th><th>Mode</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>BB Exp</th><th>Pre3x</th><th>Hist N</th><th>Hist WR%</th><th>Hist Avg%</th><th>Tgt Mid%</th><th>Tgt Band%</th><th>Risk%</th><th>RR Mid</th><th>SetupScore</th><th>$Vol20</th></tr>
+            <tr><th>Symbol</th><th>Dir</th><th>Setup</th><th>Pattern%</th><th>Bias</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>BB Exp</th><th>Pre3x</th><th>Hist N</th><th>Hist WR%</th><th>Hist Avg%</th><th>Tgt Mid%</th><th>Tgt Band%</th><th>Risk%</th><th>RR Mid</th><th>SetupScore</th><th>$Vol20</th></tr>
           </thead>
           <tbody id="results-body"></tbody>
         </table>
@@ -339,7 +339,7 @@
         <td>${row.dir}</td>
         <td>${row.setup}</td>
         <td>${num(row.pattern_similarity, 0).toFixed(1)}</td>
-        <td>${String(row.pattern_mode || 'direct')}</td>
+        <td>${String(row.pattern_mode || row.dir || 'N/A')}</td>
         <td>${row.close.toFixed(2)}</td>
         <td>${row.sma50.toFixed(2)}</td>
         <td>${row.sma89.toFixed(2)}</td>
