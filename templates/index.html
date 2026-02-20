@@ -277,6 +277,10 @@
           status.textContent = `Chart load failed for ${symbol}: ${payload.error}`;
           return;
         }
+        if (!isValidChartPayload(payload)) {
+          status.textContent = `Chart load failed for ${symbol}: invalid payload`;
+          return;
+        }
         chartModels.push({chart: payload, tier: tier || 'ranked', tf: '1D'});
         addChart(chartModels[chartModels.length - 1]);
         status.textContent = `Loaded chart: ${symbol}`;
@@ -344,6 +348,10 @@
       return vals.map(v => `<option value="${v}" ${v === selected ? 'selected' : ''}>${v}</option>`).join('');
     }
 
+    function isValidChartPayload(payload) {
+      return !!(payload && typeof payload === 'object' && payload.symbol && payload.timeframes && typeof payload.timeframes === 'object');
+    }
+
     function drawChart(model, plotId) {
       if (typeof Plotly === 'undefined') {
         status.textContent = 'Charts unavailable: Plotly CDN did not load.';
@@ -351,7 +359,15 @@
       }
       const tf = model.tf || '1D';
       const chartBundle = model.chart;
+      if (!isValidChartPayload(chartBundle)) {
+        status.textContent = 'Chart payload was incomplete. Try selecting the symbol again.';
+        return;
+      }
       const rawView = chartBundle.timeframes[tf] || chartBundle.timeframes['1D'] || Object.values(chartBundle.timeframes)[0];
+      if (!rawView || !Array.isArray(rawView.dates) || rawView.dates.length === 0) {
+        status.textContent = `No chart data available for ${chartBundle.symbol} (${tf}).`;
+        return;
+      }
       const trimByTf = { '1D': 320, '233m': 220, '55m': 200, '34m': 180, '21m': 160, '13m': 140, '8m': 120, '5m': 100 };
       const keep = trimByTf[tf] || 320;
       const start = Math.max(0, (rawView?.dates?.length || 0) - keep);
@@ -477,6 +493,10 @@
 
     function addChart(model) {
       const chartBundle = model.chart;
+      if (!isValidChartPayload(chartBundle)) {
+        status.textContent = 'Skipped a chart due to invalid payload.';
+        return;
+      }
       const tier = model.tier;
       const id = `chart-${chartBundle.symbol}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
       const selId = `${id}-tf`;
