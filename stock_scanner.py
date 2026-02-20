@@ -245,6 +245,12 @@ def parse_args() -> argparse.Namespace:
         help="Minimum fractional BB width expansion vs recent baseline.",
     )
     parser.add_argument(
+        "--max-setup-age",
+        type=int,
+        default=3,
+        help="Maximum age in daily bars for surfaced setups (0 disables age cap).",
+    )
+    parser.add_argument(
         "--require-daily-and-233",
         action="store_true",
         help="Require setup confirmation on both Daily and 233-minute charts.",
@@ -1646,6 +1652,14 @@ def _passes_directional_setup(
     # Avoid extremely stretched end-of-move candles in either direction.
     bull_ok = bull_ok and not (result.close > result.bb_upper * 1.03)
     bear_ok = bear_ok and not (result.close < result.bb_lower * 0.97)
+
+    # Freshness gate: keep surfaced daily setups in-the-moment (or very recent).
+    max_setup_age = int(getattr(args, "max_setup_age", 0) or 0)
+    if not secondary_confirmation and result.timeframe == "1D" and max_setup_age > 0:
+        bull_age = min(result.price_cross_age, result.macd_cross_age, result.stoch_cross_age, result.outer_touch_age)
+        bear_age = min(result.price_bear_cross_age, result.macd_bear_cross_age, result.stoch_bear_cross_age, result.outer_touch_age)
+        bull_ok = bull_ok and (bull_age <= max_setup_age)
+        bear_ok = bear_ok and (bear_age <= max_setup_age)
 
     return (want_bull and bull_ok) or (want_bear and bear_ok)
 
