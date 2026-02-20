@@ -276,6 +276,27 @@ def _weekly_context_ok(daily: Any, weekly: Any) -> bool:
     return bool(weekly.close >= weekly.sma50 and weekly.sma50 >= weekly.sma89)
 
 
+def _has_triple_cross(result: Any, lookback: int) -> bool:
+    direction = str(getattr(result, "setup_direction", "bull")).lower()
+    if direction == "bear":
+        return bool(
+            result.price_bear_cross_age <= lookback
+            and result.macd_bear_cross_age <= lookback
+            and result.stoch_bear_cross_age <= lookback
+            and result.triple_bear_cross_gap <= 4
+        )
+    return bool(
+        result.price_cross_age <= lookback
+        and result.macd_cross_age <= lookback
+        and result.stoch_cross_age <= lookback
+        and result.triple_cross_gap <= 4
+    )
+
+
+def _same_direction(lhs: Any, rhs: Any) -> bool:
+    return str(getattr(lhs, "setup_direction", "")).lower() == str(getattr(rhs, "setup_direction", "")).lower()
+
+
 def _precision_entry_ok(intraday: list[Candle], daily: Any, args: SimpleNamespace) -> bool:
     # Course precision ladder: 21 (daily), 13 (233), 8/5 (55/34 style intraday refinement).
     direction = str(getattr(daily, "setup_direction", "bull")).lower()
@@ -306,16 +327,16 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                 return None
             if not passes_filters(daily, args):
                 return None
+            lookback = max(4, int(getattr(args, "cross_lookback", 6)))
+            daily_has_3x = _has_triple_cross(daily, lookback)
 
             daily_candles = fetch_history(symbol)
-            if getattr(args, "require_weekly_context", False):
-                weekly_candles = _resample_daily_to_weekly(daily_candles)
-                weekly = analyze_candles(symbol, weekly_candles, "1W")
-                if not _weekly_context_ok(daily, weekly):
-                    return None
 
             if args.require_daily_and_233 or getattr(args, "require_hourly", False) or getattr(args, "require_precision_entry", False):
                 intraday = fetch_intraday(symbol, interval_min=args.intraday_interval_min)
+                tf233 = None
+                tf55 = None
+                tf34 = None
                 secondary_pass = False
 
                 if args.require_daily_and_233:
@@ -329,6 +350,30 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                     tf60 = analyze_candles(symbol, c60, "60m")
                     if tf60 and passes_secondary_timeframe_filters(tf60, args):
                         secondary_pass = True
+
+                # Core setup scan on 55/34 from course flow.
+                c55 = resample_to_minutes(intraday, target_minutes=55)
+                tf55 = analyze_candles(symbol, c55, "55m")
+                c34 = resample_to_minutes(intraday, target_minutes=34)
+                tf34 = analyze_candles(symbol, c34, "34m")
+
+                tf233_has_3x = bool(tf233 and _has_triple_cross(tf233, lookback))
+                tf55_has_3x = bool(tf55 and _has_triple_cross(tf55, lookback) and _same_direction(tf55, daily))
+                tf34_has_3x = bool(tf34 and _has_triple_cross(tf34, lookback) and _same_direction(tf34, daily))
+
+                # Hard book rule: if there is no 3x, skip this stock.
+                if not (daily_has_3x or tf233_has_3x or tf55_has_3x or tf34_has_3x):
+                    return None
+
+                # Timeframe-to-trend mapping from the course:
+                # 3x on daily/233 => confirm trend with weekly.
+                if getattr(args, "require_weekly_context", False) and (daily_has_3x or tf233_has_3x):
+                    weekly_candles = _resample_daily_to_weekly(daily_candles)
+                    weekly = analyze_candles(symbol, weekly_candles, "1W")
+                    if not _weekly_context_ok(daily, weekly):
+                        return None
+
+                # 3x on 55/34 => use daily for trend (enforced by direction match above).
 
                 if not secondary_pass:
                     return None

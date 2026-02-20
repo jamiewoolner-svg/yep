@@ -1269,7 +1269,7 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         POWS_STOCH_SMOOTH_D,
     )
     macd_line, macd_signal = macd(closes, POWS_MACD_FAST, POWS_MACD_SLOW, POWS_MACD_SIGNAL)
-    sma2_series = shift_series(sma_series(closes, 2), 2)
+    sma2_series = sma_series(closes, 2)
     sma3_series = shift_series(sma_series(closes, 3), 3)
     stoch_k_series, stoch_d_series = stoch_rsi_series(
         closes,
