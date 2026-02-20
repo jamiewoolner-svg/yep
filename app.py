@@ -398,6 +398,11 @@ def _chart_from_candles(symbol: str, timeframe: str, candles: list[Candle]) -> d
 
 
 def _result_row(analyzed: Any) -> dict[str, Any]:
+    raw_setup_score = float(getattr(analyzed, "options_setup_score", 0.0) or 0.0)
+    raw_score = float(getattr(analyzed, "score", 0.0) or 0.0)
+    raw_pre3x = float(max(getattr(analyzed, "pre3x_bull_score", 0.0), getattr(analyzed, "pre3x_bear_score", 0.0)))
+    raw_hist_wr = float(getattr(analyzed, "hist_win_rate_5y", 0.0) or 0.0)
+    rank_score = (raw_setup_score * 1000.0) + (raw_score * 10.0) + (raw_pre3x * 2.0) + (raw_hist_wr * 100.0)
     return {
         "symbol": analyzed.symbol,
         "dir": str(getattr(analyzed, "setup_direction", "n/a")).upper(),
@@ -422,9 +427,14 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "tgt_band": _safe_num(getattr(analyzed, "target_band_pct", 0.0) * 100.0, 2),
         "risk": _safe_num(getattr(analyzed, "risk_pct", 0.0) * 100.0, 2),
         "rr": _safe_num(getattr(analyzed, "rr_mid", 0.0), 2),
-        "setup_score": _safe_num(getattr(analyzed, "options_setup_score", 0.0), 1),
+        "setup_score": _safe_num(raw_setup_score, 1),
         "dollar_volume": format_money(analyzed.dollar_volume20),
-        "score": _safe_num(analyzed.score, 3),
+        "score": _safe_num(raw_score, 3),
+        "raw_setup_score": raw_setup_score,
+        "raw_score": raw_score,
+        "raw_pre3x": raw_pre3x,
+        "raw_hist_wr": raw_hist_wr,
+        "rank_score": rank_score,
     }
 
 
@@ -831,8 +841,7 @@ def scan_stream() -> Response:
 
                     found += 1
                     row = _result_row(analyzed)
-                    chart = build_chart_payload(analyzed.symbol, plot_days)
-                    yield json.dumps({"type": "match", "tier": "ranked", "row": row, "chart": chart}) + "\n"
+                    yield json.dumps({"type": "match", "tier": "ranked", "row": row}) + "\n"
                     yield json.dumps(
                         {"type": "metrics", "scanned": scanned, "matches": found, "total": total_symbols, "tier": "ranked"}
                     ) + "\n"
@@ -855,6 +864,18 @@ def scan_stream() -> Response:
         yield json.dumps({"type": "done", "count": found, "tier": "ranked"}) + "\n"
 
     return Response(_generate(), mimetype="application/x-ndjson")
+
+
+@app.route("/chart_payload", methods=["GET"])
+def chart_payload() -> Response:
+    symbol = str(request.args.get("symbol", "")).strip().upper()
+    if not symbol:
+        return Response(json.dumps({"error": "missing symbol"}), status=400, mimetype="application/json")
+    try:
+        payload = build_chart_payload(symbol, 260)
+        return Response(json.dumps(payload), mimetype="application/json")
+    except Exception as exc:
+        return Response(json.dumps({"error": str(exc)}), status=500, mimetype="application/json")
 
 
 @app.route("/simple", methods=["GET", "POST"])

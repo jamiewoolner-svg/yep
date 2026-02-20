@@ -221,8 +221,8 @@
     function sortResultRows() {
       const rows = Array.from(resultsBody.querySelectorAll('tr'));
       rows.sort((a, b) => {
-        const aScore = Number(a.dataset.score || 0);
-        const bScore = Number(b.dataset.score || 0);
+        const aScore = Number(a.dataset.rank || 0);
+        const bScore = Number(b.dataset.rank || 0);
         if (bScore !== aScore) return bScore - aScore;
         const aPre3x = Number(a.dataset.pre3x || 0);
         const bPre3x = Number(b.dataset.pre3x || 0);
@@ -237,12 +237,38 @@
       for (const r of rows) resultsBody.appendChild(r);
     }
 
-    function addRow(row) {
+    async function loadChartForSymbol(symbol, tier) {
+      const existing = chartModels.find(m => (m.chart?.symbol || '') === symbol);
+      if (existing) {
+        return;
+      }
+      try {
+        status.textContent = `Loading chart: ${symbol}...`;
+        const resp = await fetch(`/chart_payload?symbol=${encodeURIComponent(symbol)}`);
+        if (!resp.ok) {
+          status.textContent = `Chart load failed for ${symbol} (${resp.status})`;
+          return;
+        }
+        const payload = await resp.json();
+        if (payload.error) {
+          status.textContent = `Chart load failed for ${symbol}: ${payload.error}`;
+          return;
+        }
+        chartModels.push({chart: payload, tier: tier || 'ranked', tf: '1D'});
+        renderCharts();
+        status.textContent = `Loaded chart: ${symbol}`;
+      } catch (err) {
+        status.textContent = `Chart load failed for ${symbol}: ${err}`;
+      }
+    }
+
+    function addRow(row, tier) {
       const tr = document.createElement('tr');
-      tr.dataset.score = String(row.setup_score);
-      tr.dataset.pre3x = String(row.pre3x);
-      tr.dataset.histwr = String(row.hist_wr);
+      tr.dataset.rank = String(row.rank_score || 0);
+      tr.dataset.pre3x = String(row.raw_pre3x || row.pre3x || 0);
+      tr.dataset.histwr = String((row.raw_hist_wr || 0) * 100.0 || row.hist_wr || 0);
       tr.dataset.symbol = String(row.symbol || '');
+      tr.dataset.tier = String(tier || 'ranked');
       tr.innerHTML = `
         <td>${row.symbol}</td>
         <td>${row.dir}</td>
@@ -268,6 +294,9 @@
         <td>${row.setup_score.toFixed(1)}</td>
         <td>${row.dollar_volume}</td>
       `;
+      tr.style.cursor = 'pointer';
+      tr.title = 'Click to load chart';
+      tr.addEventListener('click', () => loadChartForSymbol(row.symbol, tier));
       resultsBody.appendChild(tr);
       sortResultRows();
     }
@@ -444,9 +473,7 @@
         status.textContent = msg.message;
       } else if (msg.type === 'match') {
         emptyNote.style.display = 'none';
-        addRow(msg.row);
-        chartModels.push({chart: msg.chart, tier: msg.tier, tf: '1D'});
-        renderCharts();
+        addRow(msg.row, msg.tier);
         status.textContent = `Match: ${msg.row.symbol} (${msg.tier})`;
       } else if (msg.type === 'error') {
         status.textContent = `Error: ${msg.message}`;
