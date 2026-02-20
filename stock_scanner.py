@@ -1690,17 +1690,27 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     stoch_down_recent = stoch_bear_cross_age <= 3
     macd_up_pending = (macd_gap_prev < 0 and macd_gap_now > macd_gap_prev and macd_line <= macd_signal)
     macd_down_pending = (macd_gap_prev > 0 and macd_gap_now < macd_gap_prev and macd_line >= macd_signal)
+    stoch_up_pending = (stoch_gap_prev < 0 and stoch_gap_now > stoch_gap_prev and stoch_rsi_k <= stoch_rsi_d)
+    stoch_down_pending = (stoch_gap_prev > 0 and stoch_gap_now < stoch_gap_prev and stoch_rsi_k >= stoch_rsi_d)
     spread_recent = band_widen_window_ok or band_width_double_recent_ok
     bull_phase2 = spread_recent and bull_band_ride_score >= 0.58 and touched_lower and outer_touch_age <= 14
     bear_phase2 = spread_recent and bear_band_ride_score >= 0.58 and touched_upper and outer_touch_age <= 14
-    bull_phase3 = bull_phase2 and stoch_up_recent and (macd_up_recent or macd_up_pending)
-    bear_phase3 = bear_phase2 and stoch_down_recent and (macd_down_recent or macd_down_pending)
+    bull_phase3 = bull_phase2 and (stoch_up_recent or stoch_up_pending) and (macd_up_recent or macd_up_pending)
+    bear_phase3 = bear_phase2 and (stoch_down_recent or stoch_down_pending) and (macd_down_recent or macd_down_pending)
     # Allow delayed confirmation: band-off can happen first, then MACD/Stoch cross within a few bars.
     confirm_lag_bars = 4
     bull_band_off_recent = liftoff_from_band or (liftoff_recent_age <= confirm_lag_bars)
     bear_band_off_recent = rejection_from_band or (rejection_recent_age <= confirm_lag_bars)
-    bull_phase4 = bull_phase3 and bull_band_off_recent and (macd_up_recent and stoch_up_recent)
-    bear_phase4 = bear_phase3 and bear_band_off_recent and (macd_down_recent and stoch_down_recent)
+    bull_phase4 = bull_phase3 and bull_band_off_recent and (
+        (macd_up_recent and stoch_up_recent)
+        or (macd_up_recent and stoch_up_pending)
+        or (stoch_up_recent and macd_up_pending)
+    )
+    bear_phase4 = bear_phase3 and bear_band_off_recent and (
+        (macd_down_recent and stoch_down_recent)
+        or (macd_down_recent and stoch_down_pending)
+        or (stoch_down_recent and macd_down_pending)
+    )
 
     if setup_direction == "bull":
         if bull_phase4:
@@ -1970,7 +1980,7 @@ def _passes_directional_setup(
         bull_ok = bull_ok and (result.dual_cross_gap <= 1)
         bear_ok = bear_ok and (result.dual_bear_cross_gap <= 1)
 
-    # Core timing rule: MACD cross must be recent or imminently approaching within 3 bars.
+    # Core timing rule (relaxed): crosses are preferred, but clear near-cross momentum is valid.
     macd_gap_thresh = max(0.03, abs(result.macd_signal) * 0.25)
     bull_macd_cross_up = (
         result.macd_cross_age <= max_macd_cross_age
@@ -1992,8 +2002,8 @@ def _passes_directional_setup(
         and result.macd_gap_now < result.macd_gap_prev
         and result.macd_gap_now <= macd_gap_thresh
     )
-    bull_ok = bull_ok and (bull_macd_cross_up or bull_macd_imminent)
-    bear_ok = bear_ok and (bear_macd_cross_down or bear_macd_imminent)
+    bull_macd_ready = 1.0 if bull_macd_cross_up else (0.85 if bull_macd_imminent else 0.0)
+    bear_macd_ready = 1.0 if bear_macd_cross_down else (0.85 if bear_macd_imminent else 0.0)
 
     stoch_gap_thresh = 4.0
     bull_stoch_cross_up = (
@@ -2016,8 +2026,19 @@ def _passes_directional_setup(
         and result.stoch_gap_now < result.stoch_gap_prev
         and result.stoch_gap_now <= stoch_gap_thresh
     )
-    bull_ok = bull_ok and (bull_stoch_cross_up or bull_stoch_imminent)
-    bear_ok = bear_ok and (bear_stoch_cross_down or bear_stoch_imminent)
+    bull_stoch_ready = 1.0 if bull_stoch_cross_up else (0.85 if bull_stoch_imminent else 0.0)
+    bear_stoch_ready = 1.0 if bear_stoch_cross_down else (0.85 if bear_stoch_imminent else 0.0)
+    # Do not force both to have already crossed. Accept strong "about to cross" alignment.
+    bull_momentum_ready = (
+        (bull_macd_ready + bull_stoch_ready) >= 1.35
+        and (bull_macd_ready >= 0.85 or bull_stoch_ready >= 0.85)
+    )
+    bear_momentum_ready = (
+        (bear_macd_ready + bear_stoch_ready) >= 1.35
+        and (bear_macd_ready >= 0.85 or bear_stoch_ready >= 0.85)
+    )
+    bull_ok = bull_ok and bull_momentum_ready
+    bear_ok = bear_ok and bear_momentum_ready
 
     # Pre-liftoff discovery path for setups that can evolve into 3x confirmation.
     spread_floor = max(0.0, args.min_band_expansion)
