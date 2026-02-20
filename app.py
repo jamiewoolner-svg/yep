@@ -1001,10 +1001,13 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                     if not _precision_entry_ok(intraday, daily, args):
                         return None
 
-            # Hard book rule: if there is no 3x, skip this stock.
-            if not (daily_recent_ok or tf233_recent_ok):
+            enforce_recent_gate = bool(getattr(args, "enforce_recent_lifecycle_gate", True))
+            enforce_3x_gate = bool(getattr(args, "enforce_three_x_gate", True))
+            if enforce_recent_gate and not (daily_recent_ok or tf233_recent_ok):
                 return None
-            if not (daily_has_3x or tf233_has_3x or tf55_has_3x or tf34_has_3x or daily_recent_ok or tf233_recent_ok):
+            if enforce_3x_gate and not (
+                daily_has_3x or tf233_has_3x or tf55_has_3x or tf34_has_3x or daily_recent_ok or tf233_recent_ok
+            ):
                 return None
             return daily
         except RuntimeError:
@@ -1127,12 +1130,15 @@ def scan_stream() -> Response:
         a.require_hourly = False
         a.require_precision_entry = False
         a.scan_intraday_3x = False
+        a.enforce_recent_lifecycle_gate = True
+        a.enforce_three_x_gate = True
         # Step 0: strict baseline.
         if step >= 1:
             a.allow_momentum_watchlist = True
             a.cross_lookback = max(int(getattr(a, "cross_lookback", 10)), 10)
             a.recent_daily_bars = max(int(getattr(a, "recent_daily_bars", 15)), 20)
             a.recent_233_bars = max(int(getattr(a, "recent_233_bars", 15)), 20)
+            a.enforce_recent_lifecycle_gate = False
         if step >= 2:
             a.require_band_widen_window = False
             a.require_widening_oscillation = False
@@ -1143,6 +1149,7 @@ def scan_stream() -> Response:
             a.max_band_double_age = max(int(getattr(a, "max_band_double_age", 14)), 20)
             a.min_band_width_now = min(float(getattr(a, "min_band_width_now", 0.08)), 0.04)
             a.min_band_width_percentile = min(float(getattr(a, "min_band_width_percentile", 0.60)), 0.35)
+            a.enforce_three_x_gate = False
         if step >= 4:
             a.pows = False
             a.min_course_pattern_score = 0.0
