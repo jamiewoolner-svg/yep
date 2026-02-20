@@ -402,7 +402,14 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
     raw_score = float(getattr(analyzed, "score", 0.0) or 0.0)
     raw_pre3x = float(max(getattr(analyzed, "pre3x_bull_score", 0.0), getattr(analyzed, "pre3x_bear_score", 0.0)))
     raw_hist_wr = float(getattr(analyzed, "hist_win_rate_5y", 0.0) or 0.0)
-    rank_score = (raw_setup_score * 1000.0) + (raw_score * 10.0) + (raw_pre3x * 2.0) + (raw_hist_wr * 100.0)
+    raw_bb_expansion = float(getattr(analyzed, "band_width_expansion", 0.0) or 0.0)
+    rank_score = (
+        (raw_setup_score * 1000.0)
+        + (raw_score * 10.0)
+        + (raw_pre3x * 2.0)
+        + (raw_hist_wr * 100.0)
+        + (max(0.0, raw_bb_expansion) * 300.0)
+    )
     return {
         "symbol": analyzed.symbol,
         "dir": str(getattr(analyzed, "setup_direction", "n/a")).upper(),
@@ -434,6 +441,7 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "raw_score": raw_score,
         "raw_pre3x": raw_pre3x,
         "raw_hist_wr": raw_hist_wr,
+        "raw_bb_expansion": raw_bb_expansion,
         "rank_score": rank_score,
     }
 
@@ -573,6 +581,7 @@ def _ranked_scan_args() -> SimpleNamespace:
     args.max_rsi = max(args.max_rsi, 95.0)
     args.max_stoch_rsi_k = max(args.max_stoch_rsi_k, 95.0)
     args.min_dollar_volume = min(args.min_dollar_volume, 1_000_000.0)
+    args.min_band_expansion = max(args.min_band_expansion, 0.05)
     return args
 
 

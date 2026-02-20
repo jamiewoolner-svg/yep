@@ -1595,7 +1595,7 @@ def _passes_directional_setup(
         bear_ok = bear_ok and (result.dual_bear_cross_gap <= 1)
 
     # Pre-liftoff discovery path for setups that can evolve into 3x confirmation.
-    spread_floor = max(0.0, args.min_band_expansion * 0.5)
+    spread_floor = max(0.0, args.min_band_expansion)
     bull_bb_spread_ok = (
         result.band_width_expansion >= spread_floor
         and (
@@ -1625,8 +1625,8 @@ def _passes_directional_setup(
             and result.band_width_expansion >= args.min_band_expansion
         )
     elif bb_spread_watchlist:
-        bull_ok = bull_ok and (bull_bb_spread_ok or result.pre3x_bull_score >= 7.0)
-        bear_ok = bear_ok and (bear_bb_spread_ok or result.pre3x_bear_score >= 7.0)
+        bull_ok = bull_ok and (bull_bb_spread_ok and result.pre3x_bull_score >= 6.0)
+        bear_ok = bear_ok and (bear_bb_spread_ok and result.pre3x_bear_score >= 6.0)
 
     # Only apply full options viability gates on primary (daily) timeframe.
     if not secondary_confirmation:
