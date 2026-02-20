@@ -28,6 +28,7 @@ from typing import Iterable, List, Sequence, Tuple
 
 
 STOOQ_URL = "https://stooq.com/q/d/l/"
+YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
 POLYGON_AGGS_URL = "https://api.polygon.io/v2/aggs/ticker"
 SP500_CONSTITUENTS_URL = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
 NASDAQ100_COMPANIES_URL = "https://www.nasdaq.com/solutions/global-indexes/nasdaq-100/companies"
@@ -133,7 +134,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--data-source",
-        choices=["auto", "polygon", "stooq"],
+        choices=["auto", "polygon", "stooq", "yahoo"],
         default=os.getenv("SCANNER_DATA_SOURCE", "auto"),
         help="Market data source.",
     )
@@ -515,6 +516,9 @@ def fetch_stooq_history(symbol: str) -> List[Candle]:
     except urllib.error.URLError as exc:
         raise RuntimeError(f"failed to fetch {symbol}: {exc}") from exc
 
+    if "Exceeded the daily hits limit" in raw:
+        raise RuntimeError(f"failed to fetch {symbol}: stooq daily hit limit reached")
+
     rows = list(csv.DictReader(raw.splitlines()))
     candles: List[Candle] = []
     for row in rows:
@@ -535,6 +539,74 @@ def fetch_stooq_history(symbol: str) -> List[Candle]:
             continue
 
     candles.sort(key=lambda c: c.date)
+    if not candles:
+        raise RuntimeError(f"failed to fetch {symbol}: empty stooq dataset")
+    return candles
+
+
+def fetch_yahoo_history(symbol: str) -> List[Candle]:
+    yahoo_symbol = symbol.replace(".", "-")
+    query = urllib.parse.urlencode(
+        {
+            "range": "10y",
+            "interval": "1d",
+            "includePrePost": "false",
+            "events": "div,splits",
+        }
+    )
+    url = f"{YAHOO_CHART_URL}/{urllib.parse.quote(yahoo_symbol)}?{query}"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (StockScannerCLI/1.0)"},
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"failed to fetch {symbol} from yahoo: {exc}") from exc
+
+    try:
+        payload = json.loads(raw)
+        result = (payload.get("chart", {}).get("result") or [None])[0] or {}
+        timestamps = result.get("timestamp") or []
+        quote = ((result.get("indicators") or {}).get("quote") or [None])[0] or {}
+        opens = quote.get("open") or []
+        highs = quote.get("high") or []
+        lows = quote.get("low") or []
+        closes = quote.get("close") or []
+        volumes = quote.get("volume") or []
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise RuntimeError(f"failed to parse yahoo history for {symbol}: {exc}") from exc
+
+    candles: List[Candle] = []
+    for i, ts in enumerate(timestamps):
+        if i >= len(opens) or i >= len(highs) or i >= len(lows) or i >= len(closes):
+            continue
+        o = opens[i]
+        h = highs[i]
+        l = lows[i]
+        c = closes[i]
+        v = volumes[i] if i < len(volumes) else 0
+        if any(x is None for x in (o, h, l, c)) or c in (0, "0"):
+            continue
+        try:
+            candles.append(
+                Candle(
+                    date=datetime.utcfromtimestamp(int(ts)),
+                    open=float(o),
+                    high=float(h),
+                    low=float(l),
+                    close=float(c),
+                    volume=float(v or 0),
+                )
+            )
+        except (TypeError, ValueError, OSError):
+            continue
+
+    candles.sort(key=lambda c: c.date)
+    if not candles:
+        raise RuntimeError(f"failed to fetch {symbol} from yahoo: empty dataset")
     return candles
 
 
@@ -543,15 +615,23 @@ def fetch_history(symbol: str) -> List[Candle]:
     if source == "polygon":
         return fetch_polygon_history(symbol)
     if source == "stooq":
-        return fetch_stooq_history(symbol)
+        try:
+            return fetch_stooq_history(symbol)
+        except RuntimeError:
+            return fetch_yahoo_history(symbol)
+    if source == "yahoo":
+        return fetch_yahoo_history(symbol)
 
     # auto: prefer Polygon if key exists, else fallback to Stooq
     if POLYGON_API_KEY or os.getenv("POLYGON_API_KEY", ""):
         try:
             return fetch_polygon_history(symbol)
         except RuntimeError:
-            return fetch_stooq_history(symbol)
-    return fetch_stooq_history(symbol)
+            pass
+    try:
+        return fetch_stooq_history(symbol)
+    except RuntimeError:
+        return fetch_yahoo_history(symbol)
 
 
 def fetch_stooq_intraday(symbol: str, interval_min: int = 5) -> List[Candle]:
@@ -1334,8 +1414,8 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
     require_uptrend = args.require_uptrend
     require_macd_bull = args.require_macd_bull
     require_di_bull = args.require_di_bull
-    require_macd_stoch_cross = args.require_macd_stoch_cross or args.pows
-    require_band_liftoff = args.require_band_liftoff or args.pows
+    require_macd_stoch_cross = args.require_macd_stoch_cross
+    require_band_liftoff = args.require_band_liftoff
     bb_spread_watchlist = getattr(args, "bb_spread_watchlist", False)
     require_simultaneous_cross = args.require_simultaneous_cross
     want_bull, want_bear = _direction_match(result, args)
@@ -1354,9 +1434,13 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
         # POWS context: trend bias without requiring perfect full-stack moving-average order.
         bull_ok = bull_ok and (result.close > result.sma50 and result.sma50 >= result.sma89)
         bear_ok = bear_ok and (result.close < result.sma50 and result.sma50 <= result.sma89)
-        # Course 3x language: align price (2/3 MA), Stoch, and MACD in recent bars.
-        bull_ok = bull_ok and (result.price_cross_age <= args.cross_lookback and result.triple_cross_gap <= 4)
-        bear_ok = bear_ok and (result.price_bear_cross_age <= args.cross_lookback and result.triple_bear_cross_gap <= 4)
+        # Course 3x language: accept either confirmed cross timing or strong pre-3x development.
+        bull_confirmed = result.price_cross_age <= args.cross_lookback and result.triple_cross_gap <= 4
+        bear_confirmed = result.price_bear_cross_age <= args.cross_lookback and result.triple_bear_cross_gap <= 4
+        bull_developing = bb_spread_watchlist and result.pre3x_bull_score >= 6.0
+        bear_developing = bb_spread_watchlist and result.pre3x_bear_score >= 6.0
+        bull_ok = bull_ok and (bull_confirmed or bull_developing)
+        bear_ok = bear_ok and (bear_confirmed or bear_developing)
 
     if require_macd_bull:
         bull_ok = bull_ok and (result.macd > result.macd_signal)
@@ -1405,9 +1489,11 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
         bull_ok = bull_ok and (bull_bb_spread_ok or result.pre3x_bull_score >= 7.0)
         bear_ok = bear_ok and (bear_bb_spread_ok or result.pre3x_bear_score >= 7.0)
 
-    # Options swing viability floor: enough room to mid-band and reasonable setup quality.
-    bull_ok = bull_ok and (result.target_mid_pct >= 0.01 and result.options_setup_score >= 35.0)
-    bear_ok = bear_ok and (result.target_mid_pct >= 0.01 and result.options_setup_score >= 35.0)
+    # Options swing viability floor: relax in watchlist/developing mode to surface early setups.
+    min_target_mid = 0.005 if (bb_spread_watchlist and not require_band_liftoff) else 0.01
+    min_setup_score = 24.0 if (bb_spread_watchlist and not require_macd_stoch_cross) else 35.0
+    bull_ok = bull_ok and (result.target_mid_pct >= min_target_mid and result.options_setup_score >= min_setup_score)
+    bear_ok = bear_ok and (result.target_mid_pct >= min_target_mid and result.options_setup_score >= min_setup_score)
 
     # Avoid extremely stretched end-of-move candles in either direction.
     bull_ok = bull_ok and not (result.close > result.bb_upper * 1.03)
