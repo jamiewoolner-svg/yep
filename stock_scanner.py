@@ -94,6 +94,13 @@ class ScanResult:
     hist_setups_5y: int
     hist_win_rate_5y: float
     hist_avg_return_5y: float
+    setup_direction: str
+    setup_type: str
+    target_mid_pct: float
+    target_band_pct: float
+    risk_pct: float
+    rr_mid: float
+    options_setup_score: float
     touched_outer_band_recent: bool
     outer_touch_age: int
     band_width_expansion: float
@@ -1172,6 +1179,62 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     )
     hist_setups_5y, hist_win_rate_5y, hist_avg_return_5y = historical_band_swing_metrics(candles, years=HISTORICAL_LOOKBACK_YEARS)
 
+    bull_evidence = (
+        pre3x_bull_score
+        + (1.0 if macd_line >= macd_signal else 0.0)
+        + (1.0 if stoch_rsi_k >= stoch_rsi_d else 0.0)
+        + (1.0 if close >= bb_mid else 0.0)
+    )
+    bear_evidence = (
+        pre3x_bear_score
+        + (1.0 if macd_line <= macd_signal else 0.0)
+        + (1.0 if stoch_rsi_k <= stoch_rsi_d else 0.0)
+        + (1.0 if close <= bb_mid else 0.0)
+    )
+    setup_direction = "bull" if bull_evidence >= bear_evidence else "bear"
+    if setup_direction == "bull":
+        if liftoff_from_band:
+            setup_type = "Band Bounce"
+        elif band_width_expansion > 0 and close >= bb_mid:
+            setup_type = "Band Expansion"
+        else:
+            setup_type = "Developing"
+        target_mid_pct = max(0.0, (bb_mid - close) / close)
+        target_band_pct = max(0.0, (bb_upper - close) / close)
+        risk_anchor = max(bb_lower, lows[-1])
+        risk_pct = max(0.0, (close - risk_anchor) / close)
+    else:
+        if rejection_from_band:
+            setup_type = "Band Reject"
+        elif band_width_expansion > 0 and close <= bb_mid:
+            setup_type = "Band Expansion"
+        else:
+            setup_type = "Developing"
+        target_mid_pct = max(0.0, (close - bb_mid) / close)
+        target_band_pct = max(0.0, (close - bb_lower) / close)
+        risk_anchor = min(bb_upper, highs[-1])
+        risk_pct = max(0.0, (risk_anchor - close) / close)
+
+    rr_mid = (target_mid_pct / risk_pct) if risk_pct > 0 else 0.0
+
+    def _clamp01(v: float) -> float:
+        return max(0.0, min(1.0, v))
+
+    hist_quality = _clamp01((hist_win_rate_5y - 0.45) / 0.25)
+    hist_density = _clamp01(hist_setups_5y / 30.0)
+    move_quality = _clamp01(target_mid_pct / 0.025)
+    rr_quality = _clamp01(rr_mid / 2.0)
+    pre3x_quality = _clamp01(max(pre3x_bull_score, pre3x_bear_score) / 10.0)
+    liq_quality = _clamp01((math.log10(max(dollar_volume20, 1.0)) - 6.0) / 2.0)
+    options_setup_score = (
+        35.0 * pre3x_quality
+        + 20.0 * hist_quality
+        + 10.0 * hist_density
+        + 15.0 * move_quality
+        + 10.0 * rr_quality
+        + 10.0 * liq_quality
+    )
+
     # Composite ranking: trend, liquidity, and moderate RSI preferred.
     trend_component = (close / sma20) + (sma20 / sma50)
     liquidity_component = math.log10(max(dollar_volume20, 1.0))
@@ -1195,6 +1258,7 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         + min(1.0, hist_setups_5y / 40.0)
         + (hist_win_rate_5y - 0.5)
         + (hist_avg_return_5y * 10.0)
+        + (options_setup_score / 100.0)
     )
 
     return ScanResult(
@@ -1233,6 +1297,13 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         hist_setups_5y=hist_setups_5y,
         hist_win_rate_5y=hist_win_rate_5y,
         hist_avg_return_5y=hist_avg_return_5y,
+        setup_direction=setup_direction,
+        setup_type=setup_type,
+        target_mid_pct=target_mid_pct,
+        target_band_pct=target_band_pct,
+        risk_pct=risk_pct,
+        rr_mid=rr_mid,
+        options_setup_score=options_setup_score,
         touched_outer_band_recent=touched_outer_band_recent,
         outer_touch_age=outer_touch_age,
         band_width_expansion=band_width_expansion,
@@ -1333,6 +1404,10 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
     elif bb_spread_watchlist:
         bull_ok = bull_ok and (bull_bb_spread_ok or result.pre3x_bull_score >= 7.0)
         bear_ok = bear_ok and (bear_bb_spread_ok or result.pre3x_bear_score >= 7.0)
+
+    # Options swing viability floor: enough room to mid-band and reasonable setup quality.
+    bull_ok = bull_ok and (result.target_mid_pct >= 0.01 and result.options_setup_score >= 35.0)
+    bear_ok = bear_ok and (result.target_mid_pct >= 0.01 and result.options_setup_score >= 35.0)
 
     # Avoid extremely stretched end-of-move candles in either direction.
     bull_ok = bull_ok and not (result.close > result.bb_upper * 1.03)

@@ -99,6 +99,8 @@ def _to_json_series(values: list[float]) -> list[float | None]:
 def _result_row(analyzed: Any) -> dict[str, Any]:
     return {
         "symbol": analyzed.symbol,
+        "dir": str(getattr(analyzed, "setup_direction", "n/a")).upper(),
+        "setup": str(getattr(analyzed, "setup_type", "n/a")),
         "close": _safe_num(analyzed.close, 2),
         "sma50": _safe_num(analyzed.sma50, 2),
         "sma89": _safe_num(analyzed.sma89, 2),
@@ -115,6 +117,11 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "hist_n": int(getattr(analyzed, "hist_setups_5y", 0)),
         "hist_wr": _safe_num(getattr(analyzed, "hist_win_rate_5y", 0.0) * 100.0, 1),
         "hist_avg": _safe_num(getattr(analyzed, "hist_avg_return_5y", 0.0) * 100.0, 2),
+        "tgt_mid": _safe_num(getattr(analyzed, "target_mid_pct", 0.0) * 100.0, 2),
+        "tgt_band": _safe_num(getattr(analyzed, "target_band_pct", 0.0) * 100.0, 2),
+        "risk": _safe_num(getattr(analyzed, "risk_pct", 0.0) * 100.0, 2),
+        "rr": _safe_num(getattr(analyzed, "rr_mid", 0.0), 2),
+        "opt_score": _safe_num(getattr(analyzed, "options_setup_score", 0.0), 1),
         "dollar_volume": format_money(analyzed.dollar_volume20),
         "score": _safe_num(analyzed.score, 3),
     }

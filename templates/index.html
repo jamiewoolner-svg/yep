@@ -254,7 +254,7 @@
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Symbol</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>MACD Age Bear</th><th>Stoch Age Bear</th><th>BB Exp</th><th>Pre3x</th><th>Hist N</th><th>Hist WR%</th><th>Hist Avg%</th><th>$Vol20</th><th>Score</th></tr>
+            <tr><th>Symbol</th><th>Dir</th><th>Setup</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>MACD Age Bear</th><th>Stoch Age Bear</th><th>BB Exp</th><th>Pre3x</th><th>Hist N</th><th>Hist WR%</th><th>Hist Avg%</th><th>Tgt Mid%</th><th>Tgt Band%</th><th>Risk%</th><th>RR Mid</th><th>OptScore</th><th>$Vol20</th><th>Score</th></tr>
           </thead>
           <tbody id="results-body"></tbody>
         </table>
@@ -285,9 +285,11 @@
 
     function addRow(row) {
       const tr = document.createElement('tr');
-      tr.dataset.score = String(row.score);
+      tr.dataset.score = String(row.opt_score);
       tr.innerHTML = `
         <td>${row.symbol}</td>
+        <td>${row.dir}</td>
+        <td>${row.setup}</td>
         <td>${row.close.toFixed(2)}</td>
         <td>${row.sma50.toFixed(2)}</td>
         <td>${row.sma89.toFixed(2)}</td>
@@ -304,13 +306,18 @@
         <td>${row.hist_n}</td>
         <td>${row.hist_wr.toFixed(1)}</td>
         <td>${row.hist_avg.toFixed(2)}</td>
+        <td>${row.tgt_mid.toFixed(2)}</td>
+        <td>${row.tgt_band.toFixed(2)}</td>
+        <td>${row.risk.toFixed(2)}</td>
+        <td>${row.rr.toFixed(2)}</td>
+        <td>${row.opt_score.toFixed(1)}</td>
         <td>${row.dollar_volume}</td>
         <td>${row.score.toFixed(3)}</td>
       `;
       let inserted = false;
       for (const existing of resultsBody.children) {
         const existingScore = Number(existing.dataset.score || 0);
-        if (row.score > existingScore) {
+        if (row.opt_score > existingScore) {
           resultsBody.insertBefore(tr, existing);
           inserted = true;
           break;
