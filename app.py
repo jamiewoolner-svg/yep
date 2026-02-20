@@ -404,12 +404,16 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
     raw_pre3x = float(max(getattr(analyzed, "pre3x_bull_score", 0.0), getattr(analyzed, "pre3x_bear_score", 0.0)))
     raw_hist_wr = float(getattr(analyzed, "hist_win_rate_5y", 0.0) or 0.0)
     raw_bb_expansion = float(getattr(analyzed, "band_width_expansion", 0.0) or 0.0)
+    raw_pattern_similarity = float(getattr(analyzed, "pattern_similarity", 0.0) or 0.0)
+    raw_pattern_direct = float(getattr(analyzed, "pattern_similarity_direct", 0.0) or 0.0)
+    raw_pattern_inverse = float(getattr(analyzed, "pattern_similarity_inverse", 0.0) or 0.0)
     rank_score = (
         (raw_setup_score * 1000.0)
         + (raw_score * 10.0)
         + (raw_pre3x * 2.0)
         + (raw_hist_wr * 100.0)
         + (max(0.0, raw_bb_expansion) * 300.0)
+        + (raw_pattern_similarity * 600.0)
     )
     return {
         "symbol": analyzed.symbol,
@@ -443,6 +447,11 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "raw_pre3x": raw_pre3x,
         "raw_hist_wr": raw_hist_wr,
         "raw_bb_expansion": raw_bb_expansion,
+        "pattern_similarity": _safe_num(raw_pattern_similarity * 100.0, 1),
+        "raw_pattern_similarity": raw_pattern_similarity,
+        "pattern_mode": str(getattr(analyzed, "pattern_mode", "direct")),
+        "pattern_direct": _safe_num(raw_pattern_direct * 100.0, 1),
+        "pattern_inverse": _safe_num(raw_pattern_inverse * 100.0, 1),
         "rank_score": rank_score,
     }
 
@@ -586,6 +595,74 @@ def _ranked_scan_args() -> SimpleNamespace:
     args.min_band_expansion = max(args.min_band_expansion, 0.08)
     args.band_touch_lookback = min(args.band_touch_lookback, 3)
     return args
+
+
+def _clamp01(value: float) -> float:
+    if math.isnan(value) or math.isinf(value):
+        return 0.0
+    return max(0.0, min(1.0, value))
+
+
+def _sim_by_distance(a: float, b: float, scale: float) -> float:
+    if scale <= 0:
+        return 0.0
+    if any(math.isnan(v) or math.isinf(v) for v in (a, b)):
+        return 0.0
+    return _clamp01(1.0 - (abs(a - b) / scale))
+
+
+def _build_reference_pattern(symbol: str = "IBM") -> Any | None:
+    candles = fetch_history(symbol)
+    if len(candles) < 120:
+        return None
+    return analyze_candles(symbol, candles, "1D")
+
+
+def _pattern_similarity(reference: Any, candidate: Any) -> float:
+    if not reference or not candidate:
+        return 0.0
+    ref_macd_hist = float(reference.macd - reference.macd_signal)
+    cand_macd_hist = float(candidate.macd - candidate.macd_signal)
+    ref_pre3x = float(max(reference.pre3x_bull_score, reference.pre3x_bear_score))
+    cand_pre3x = float(max(candidate.pre3x_bull_score, candidate.pre3x_bear_score))
+    ref_direction = str(getattr(reference, "setup_direction", ""))
+    cand_direction = str(getattr(candidate, "setup_direction", ""))
+
+    similarity = (
+        0.28 * _sim_by_distance(float(reference.band_width_expansion), float(candidate.band_width_expansion), 0.18)
+        + 0.18 * _sim_by_distance(ref_pre3x, cand_pre3x, 3.0)
+        + 0.16 * _sim_by_distance(ref_macd_hist, cand_macd_hist, 0.45)
+        + 0.12 * _sim_by_distance(float(reference.stoch_rsi_k), float(candidate.stoch_rsi_k), 26.0)
+        + 0.12 * _sim_by_distance(float(reference.adx14), float(candidate.adx14), 14.0)
+        + 0.10 * _sim_by_distance(float(reference.target_mid_pct), float(candidate.target_mid_pct), 0.03)
+        + 0.04 * (1.0 if ref_direction and ref_direction == cand_direction else 0.0)
+    )
+    return _clamp01(similarity)
+
+
+def _inverse_pattern_similarity(reference: Any, candidate: Any) -> float:
+    if not reference or not candidate:
+        return 0.0
+    ref_macd_hist = float(reference.macd - reference.macd_signal)
+    cand_macd_hist = float(candidate.macd - candidate.macd_signal)
+    ref_pre3x = float(max(reference.pre3x_bull_score, reference.pre3x_bear_score))
+    cand_pre3x = float(max(candidate.pre3x_bull_score, candidate.pre3x_bear_score))
+    ref_direction = str(getattr(reference, "setup_direction", ""))
+    cand_direction = str(getattr(candidate, "setup_direction", ""))
+    ref_stoch = float(reference.stoch_rsi_k)
+    cand_stoch = float(candidate.stoch_rsi_k)
+
+    # Inverse pattern: momentum and oscillator mirror the reference, while spread/quality can stay similar.
+    similarity = (
+        0.24 * _sim_by_distance(float(reference.band_width_expansion), float(candidate.band_width_expansion), 0.18)
+        + 0.16 * _sim_by_distance(ref_pre3x, cand_pre3x, 3.0)
+        + 0.22 * _sim_by_distance(-ref_macd_hist, cand_macd_hist, 0.45)
+        + 0.14 * _sim_by_distance(100.0 - ref_stoch, cand_stoch, 26.0)
+        + 0.10 * _sim_by_distance(float(reference.adx14), float(candidate.adx14), 14.0)
+        + 0.10 * _sim_by_distance(float(reference.target_mid_pct), float(candidate.target_mid_pct), 0.03)
+        + 0.04 * (1.0 if ref_direction and cand_direction and ref_direction != cand_direction else 0.0)
+    )
+    return _clamp01(similarity)
 
 
 def _resample_daily_to_weekly(candles: list[Candle]) -> list[Candle]:
@@ -810,12 +887,30 @@ def scan_stream() -> Response:
     base_args = _ranked_scan_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = max(0, int(base_args.max_retries))
+    reference_symbol = str(os.getenv("PATTERN_REF_SYMBOL", "IBM")).strip().upper() or "IBM"
+    reference_pattern = None
+    reference_error = ""
+    try:
+        reference_pattern = _build_reference_pattern(reference_symbol)
+        if not reference_pattern:
+            reference_error = f"reference pattern unavailable for {reference_symbol}"
+    except Exception as exc:
+        reference_error = f"reference pattern unavailable for {reference_symbol}: {exc}"
 
     @stream_with_context
     def _generate() -> Any:
         found = 0
         total_symbols = len(symbols)
         yield json.dumps({"type": "status", "message": f"Universe size: {total_symbols} symbols"}) + "\n"
+        if reference_pattern:
+            yield json.dumps(
+                {
+                    "type": "status",
+                    "message": f"Reference pattern: {reference_symbol} ({str(getattr(reference_pattern, 'setup_direction', 'n/a')).upper()}) with inverse enabled",
+                }
+            ) + "\n"
+        elif reference_error:
+            yield json.dumps({"type": "status", "message": f"Reference pattern skipped: {reference_error}"}) + "\n"
         yield json.dumps({"type": "metrics", "scanned": 0, "matches": 0, "total": total_symbols, "tier": "ranked"}) + "\n"
         yield json.dumps({"type": "status", "message": "Scanning ranked universe...", "tier": "ranked"}) + "\n"
 
@@ -850,6 +945,14 @@ def scan_stream() -> Response:
 
                     if not analyzed:
                         continue
+
+                    if reference_pattern:
+                        direct_similarity = _pattern_similarity(reference_pattern, analyzed)
+                        inverse_similarity = _inverse_pattern_similarity(reference_pattern, analyzed)
+                        setattr(analyzed, "pattern_similarity_direct", direct_similarity)
+                        setattr(analyzed, "pattern_similarity_inverse", inverse_similarity)
+                        setattr(analyzed, "pattern_similarity", max(direct_similarity, inverse_similarity))
+                        setattr(analyzed, "pattern_mode", "inverse" if inverse_similarity > direct_similarity else "direct")
 
                     found += 1
                     row = _result_row(analyzed)

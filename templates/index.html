@@ -180,7 +180,7 @@
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>Symbol</th><th>Dir</th><th>Setup</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>BB Exp</th><th>Pre3x</th><th>Hist N</th><th>Hist WR%</th><th>Hist Avg%</th><th>Tgt Mid%</th><th>Tgt Band%</th><th>Risk%</th><th>RR Mid</th><th>SetupScore</th><th>$Vol20</th></tr>
+            <tr><th>Symbol</th><th>Dir</th><th>Setup</th><th>Pattern%</th><th>Mode</th><th>Close</th><th>SMA50</th><th>SMA89</th><th>SMA200</th><th>StochK</th><th>MACD Hist</th><th>ADX</th><th>MACD Age</th><th>Stoch Age</th><th>BB Exp</th><th>Pre3x</th><th>Hist N</th><th>Hist WR%</th><th>Hist Avg%</th><th>Tgt Mid%</th><th>Tgt Band%</th><th>Risk%</th><th>RR Mid</th><th>SetupScore</th><th>$Vol20</th></tr>
           </thead>
           <tbody id="results-body"></tbody>
         </table>
@@ -234,6 +234,9 @@
         const aBb = num(a.dataset.bbexp, 0);
         const bBb = num(b.dataset.bbexp, 0);
         if (bBb !== aBb) return bBb - aBb;
+        const aPattern = num(a.dataset.pattern, 0);
+        const bPattern = num(b.dataset.pattern, 0);
+        if (bPattern !== aPattern) return bPattern - aPattern;
         const aPre3x = num(a.dataset.pre3x, 0);
         const bPre3x = num(b.dataset.pre3x, 0);
         if (bPre3x !== aPre3x) return bPre3x - aPre3x;
@@ -302,12 +305,15 @@
       tr.dataset.pre3x = String(num(row.raw_pre3x, num(row.pre3x, 0)));
       tr.dataset.histwr = String(num(row.raw_hist_wr, num(row.hist_wr, 0) / 100.0) * 100.0);
       tr.dataset.bbexp = String(num(row.raw_bb_expansion, num(row.bb_expansion, 0)));
+      tr.dataset.pattern = String(num(row.raw_pattern_similarity, num(row.pattern_similarity, 0) / 100.0) * 100.0);
       tr.dataset.symbol = String(row.symbol || '');
       tr.dataset.tier = String(tier || 'ranked');
       tr.innerHTML = `
         <td>${row.symbol}</td>
         <td>${row.dir}</td>
         <td>${row.setup}</td>
+        <td>${num(row.pattern_similarity, 0).toFixed(1)}</td>
+        <td>${String(row.pattern_mode || 'direct')}</td>
         <td>${row.close.toFixed(2)}</td>
         <td>${row.sma50.toFixed(2)}</td>
         <td>${row.sma89.toFixed(2)}</td>
