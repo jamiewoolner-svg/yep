@@ -103,15 +103,6 @@
     }
     .metrics { display: flex; gap: 10px; font-size: 12px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
     .metrics span { background: #152432; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
-    .calendar-list {
-      margin: 0;
-      padding-left: 18px;
-      color: var(--ink);
-      max-height: 220px;
-      overflow: auto;
-    }
-    .calendar-list li { margin: 4px 0; }
-    .calendar-empty { color: var(--muted); margin: 0; }
     .err { color: var(--danger); font-weight: 700; margin-top: 8px; }
     #empty-note { margin-top: 10px; }
     .signal-feed {
@@ -217,12 +208,6 @@
     </div>
 
     <div class="card">
-      <h2>Upcoming Risk Calendar (7 Days)</h2>
-      <p id="calendar-note" class="calendar-empty">Loading upcoming macro events...</p>
-      <ul id="calendar-list" class="calendar-list"></ul>
-    </div>
-
-    <div class="card">
       <h2>Signals</h2>
       <p id="empty-note">No matches yet. Run a scan.</p>
       <div id="signal-feed" class="signal-feed"></div>
@@ -238,8 +223,6 @@
     const tierEl = document.getElementById('m-tier');
     const scannedEl = document.getElementById('m-scanned');
     const matchesEl = document.getElementById('m-matches');
-    const calendarNote = document.getElementById('calendar-note');
-    const calendarList = document.getElementById('calendar-list');
 
     let activeController = null;
     const models = [];
@@ -526,36 +509,6 @@
       }
     }
 
-    async function loadCalendar(symbols = []) {
-      try {
-        calendarNote.textContent = 'Loading upcoming events...';
-        calendarList.innerHTML = '';
-        const qs = new URLSearchParams();
-        qs.set('days', '7');
-        if (symbols.length) qs.set('symbols', symbols.join(','));
-        const resp = await fetch(`/calendar_events?${qs.toString()}`);
-        if (!resp.ok) {
-          calendarNote.textContent = `Calendar unavailable (${resp.status}).`;
-          return;
-        }
-        const payload = await resp.json();
-        const events = Array.isArray(payload.events) ? payload.events : [];
-        if (!events.length) {
-          calendarNote.textContent = 'No major events in the next 7 days.';
-          return;
-        }
-        calendarNote.textContent = `Loaded ${events.length} event(s) for the next ${payload.days || 7} day(s).`;
-        for (const ev of events) {
-          const li = document.createElement('li');
-          const sym = String(ev.label || '').includes('Earnings') ? ' [earnings]' : '';
-          li.textContent = `${ev.date} - ${ev.label}${sym}`;
-          calendarList.appendChild(li);
-        }
-      } catch (err) {
-        calendarNote.textContent = `Calendar load failed: ${err}`;
-      }
-    }
-
     async function handleMessage(msg) {
       if (msg.type === 'status' || msg.type === 'progress') {
         status.textContent = msg.message;
@@ -595,7 +548,6 @@
       }
       if (msg.type === 'done') {
         status.textContent = `Done. ${msg.count} match(es), tier: ${msg.tier}`;
-        await loadCalendar(sortedSymbols());
         return;
       }
       if (msg.type === 'metrics') {
@@ -667,7 +619,6 @@
       }
     });
 
-    // Initial calendar load can block on external feeds; defer until scan completes.
   </script>
 </body>
 </html>

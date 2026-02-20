@@ -1049,7 +1049,7 @@ def scan_stream() -> Response:
             parsed_tiers = [float(getattr(base_args, "min_course_pattern_score", 62.0)), 56.0, 50.0]
     else:
         strict = float(getattr(base_args, "min_course_pattern_score", 62.0))
-        parsed_tiers = [strict, max(56.0, strict - 4.0), 50.0]
+        parsed_tiers = [strict, 50.0, 35.0]
     course_score_tiers = sorted({max(0.0, t) for t in parsed_tiers}, reverse=True)
     # Coverage tiers: keep strict rules in tier 1, then relax BB gates gradually.
     bb_multiple_tiers = [
@@ -1149,8 +1149,23 @@ def scan_stream() -> Response:
             tier_args.min_band_ride_score = band_ride_tiers[tier_i]
             tier_args.require_widening_oscillation = require_oscillation_tiers[tier_i]
             tier_args.min_band_oscillation_score = bb_osc_tiers[tier_i]
-            tier_args.recent_daily_bars = 15
-            tier_args.recent_233_bars = 15
+            tier_args.recent_daily_bars = 15 if tier_i < 2 else 21
+            tier_args.recent_233_bars = 15 if tier_i < 2 else 21
+            if tier_i == 2:
+                # True fallback tier: broaden to avoid all-zero scans.
+                tier_args.pows = False
+                tier_args.min_course_pattern_score = min(tier_args.min_course_pattern_score, 35.0)
+                tier_args.min_target_band_pct = min(tier_args.min_target_band_pct, 0.003)
+                tier_args.min_band_vs_prev_month = min(tier_args.min_band_vs_prev_month, 1.0)
+                tier_args.max_band_double_age = max(tier_args.max_band_double_age, 30)
+                tier_args.min_band_width_now = min(tier_args.min_band_width_now, 0.0)
+                tier_args.min_band_width_percentile = min(tier_args.min_band_width_percentile, 0.0)
+                tier_args.min_band_slope3 = min(tier_args.min_band_slope3, -1.0)
+                tier_args.min_band_expansion = min(tier_args.min_band_expansion, -1.0)
+                tier_args.band_touch_lookback = max(tier_args.band_touch_lookback, 30)
+                tier_args.require_band_widen_window = False
+                tier_args.require_widening_oscillation = False
+                tier_args.require_band_ride = False
             if idx > 0:
                 yield json.dumps(
                     {
