@@ -1382,6 +1382,30 @@ def scan_stream() -> Response:
             relaxed_step = min(2, max_tune_steps - 1)
             yield from _run_pass("pass 2/2", _tuned_args(relaxed_step), remaining_symbols, candidate_rows, count_toward_found=True)
 
+        # Recovery pass: keep hourly confirmation, but relax setup gating to avoid zero-result scans.
+        if len(candidate_rows) < output_limit and (time.time() - scan_start_ts) <= max_scan_seconds:
+            remaining_symbols = [s for s in scan_pool if s not in candidate_rows]
+            recovery_args = copy.deepcopy(base_args)
+            recovery_args.require_daily_and_233 = False
+            recovery_args.require_hourly = True
+            recovery_args.require_secondary_confirmation = True
+            recovery_args.require_precision_entry = False
+            recovery_args.scan_intraday_3x = False
+            recovery_args.allow_momentum_watchlist = True
+            recovery_args.force_candidate_mode = True
+            recovery_args.require_macd_stoch_cross = False
+            recovery_args.require_band_liftoff = False
+            recovery_args.require_widening_oscillation = False
+            recovery_args.require_band_widen_window = False
+            recovery_args.require_band_ride = False
+            recovery_args.min_course_pattern_score = 0.0
+            recovery_args.min_adx = 0.0
+            recovery_args.max_rsi = 99.0
+            recovery_args.max_stoch_rsi_k = 99.0
+            recovery_args.enforce_recent_lifecycle_gate = False
+            recovery_args.enforce_three_x_gate = False
+            yield from _run_pass("recovery", recovery_args, remaining_symbols, candidate_rows, count_toward_found=True)
+
         if (time.time() - scan_start_ts) > max_scan_seconds:
             yield json.dumps(
                 {
