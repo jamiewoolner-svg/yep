@@ -631,8 +631,6 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
             if args.require_daily_and_233 or getattr(args, "require_hourly", False) or getattr(args, "require_precision_entry", False):
                 intraday = fetch_intraday(symbol, interval_min=args.intraday_interval_min)
                 tf233 = None
-                tf55 = None
-                tf34 = None
                 secondary_pass = False
 
                 if args.require_daily_and_233:
@@ -647,15 +645,18 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                     if tf60 and passes_secondary_timeframe_filters(tf60, args):
                         secondary_pass = True
 
-                # Core setup scan on 55/34 from course flow.
-                c55 = resample_to_minutes(intraday, target_minutes=55)
-                tf55 = analyze_candles(symbol, c55, "55m")
-                c34 = resample_to_minutes(intraday, target_minutes=34)
-                tf34 = analyze_candles(symbol, c34, "34m")
-
                 tf233_has_3x = bool(tf233 and _has_triple_cross(tf233, lookback))
-                tf55_has_3x = bool(tf55 and _has_triple_cross(tf55, lookback) and _same_direction(tf55, daily))
-                tf34_has_3x = bool(tf34 and _has_triple_cross(tf34, lookback) and _same_direction(tf34, daily))
+                tf55_has_3x = False
+                tf34_has_3x = False
+
+                # Only compute 55/34 if daily/233 didn't already satisfy the 3x gate.
+                if not (daily_has_3x or tf233_has_3x):
+                    c55 = resample_to_minutes(intraday, target_minutes=55)
+                    tf55 = analyze_candles(symbol, c55, "55m")
+                    c34 = resample_to_minutes(intraday, target_minutes=34)
+                    tf34 = analyze_candles(symbol, c34, "34m")
+                    tf55_has_3x = bool(tf55 and _has_triple_cross(tf55, lookback) and _same_direction(tf55, daily))
+                    tf34_has_3x = bool(tf34 and _has_triple_cross(tf34, lookback) and _same_direction(tf34, daily))
 
                 # Hard book rule: if there is no 3x, skip this stock.
                 if not (daily_has_3x or tf233_has_3x or tf55_has_3x or tf34_has_3x):
@@ -729,7 +730,7 @@ def index() -> str:
 
 @app.route("/scan_stream", methods=["POST"])
 def scan_stream() -> Response:
-    workers = 16
+    workers = max(8, int(os.getenv("SCAN_WORKERS", "24")))
     plot_days = 260
 
     try:
