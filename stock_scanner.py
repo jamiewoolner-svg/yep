@@ -679,13 +679,15 @@ def rolling_stdev(values: Sequence[float], period: int) -> List[float]:
     return out
 
 
-def rsi(values: Sequence[float], period: int = 14) -> float:
+def rsi_series(values: Sequence[float], period: int = 14) -> List[float]:
+    """Wilder-style RSI series used by most charting packages."""
+    out = [math.nan] * len(values)
     if len(values) < period + 1:
-        return math.nan
+        return out
 
     gains = []
     losses = []
-    for i in range(-period, 0):
+    for i in range(1, period + 1):
         change = values[i] - values[i - 1]
         gains.append(max(change, 0.0))
         losses.append(max(-change, 0.0))
@@ -694,26 +696,43 @@ def rsi(values: Sequence[float], period: int = 14) -> float:
     avg_loss = statistics.fmean(losses)
 
     if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return 100.0 - (100.0 / (1.0 + rs))
+        out[period] = 100.0
+    else:
+        rs = avg_gain / avg_loss
+        out[period] = 100.0 - (100.0 / (1.0 + rs))
+
+    for idx in range(period + 1, len(values)):
+        change = values[idx] - values[idx - 1]
+        gain = max(change, 0.0)
+        loss = max(-change, 0.0)
+        avg_gain = ((avg_gain * (period - 1)) + gain) / period
+        avg_loss = ((avg_loss * (period - 1)) + loss) / period
+        if avg_loss == 0:
+            out[idx] = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            out[idx] = 100.0 - (100.0 / (1.0 + rs))
+
+    return out
+
+
+def rsi(values: Sequence[float], period: int = 14) -> float:
+    series = rsi_series(values, period)
+    return next((x for x in reversed(series) if not math.isnan(x)), math.nan)
 
 
 def stoch_rsi(values: Sequence[float], rsi_period: int = 14, stoch_period: int = 14, smooth_k: int = 3, smooth_d: int = 3) -> tuple[float, float]:
     if len(values) < rsi_period + stoch_period + smooth_k + smooth_d:
         return math.nan, math.nan
 
-    rsi_series = [math.nan] * len(values)
-    for idx in range(rsi_period, len(values)):
-        window = values[: idx + 1]
-        rsi_series[idx] = rsi(window, rsi_period)
+    rsi_vals = rsi_series(values, rsi_period)
 
     raw_k = []
     for idx in range(len(values)):
-        if idx < rsi_period + stoch_period - 1 or math.isnan(rsi_series[idx]):
+        if idx < rsi_period + stoch_period - 1 or math.isnan(rsi_vals[idx]):
             raw_k.append(math.nan)
             continue
-        window = [x for x in rsi_series[idx - stoch_period + 1 : idx + 1] if not math.isnan(x)]
+        window = [x for x in rsi_vals[idx - stoch_period + 1 : idx + 1] if not math.isnan(x)]
         if not window:
             raw_k.append(math.nan)
             continue
@@ -722,7 +741,7 @@ def stoch_rsi(values: Sequence[float], rsi_period: int = 14, stoch_period: int =
         if hi == lo:
             raw_k.append(0.0)
         else:
-            raw_k.append((rsi_series[idx] - lo) / (hi - lo) * 100.0)
+            raw_k.append((rsi_vals[idx] - lo) / (hi - lo) * 100.0)
 
     valid_k = [x for x in raw_k if not math.isnan(x)]
     if len(valid_k) < smooth_k + smooth_d:
@@ -763,9 +782,7 @@ def stoch_rsi_series(values: Sequence[float], rsi_period: int = 14, stoch_period
     if not values:
         return [], []
 
-    rsi_vals = [math.nan] * len(values)
-    for idx in range(rsi_period, len(values)):
-        rsi_vals[idx] = rsi(values[: idx + 1], rsi_period)
+    rsi_vals = rsi_series(values, rsi_period)
 
     raw_k = [math.nan] * len(values)
     for idx in range(len(values)):
