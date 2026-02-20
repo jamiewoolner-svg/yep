@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # One-command report generator + local browser view.
-# Requires app server running (default: http://127.0.0.1:5060).
+# Requires app server running (default: http://127.0.0.1:5055).
 
-APP_BASE_URL="${APP_BASE_URL:-http://127.0.0.1:5060}"
+APP_BASE_URL="${APP_BASE_URL:-http://127.0.0.1:5055}"
 OUT_FILE="${OUT_FILE:-scan_report.html}"
 SERVE_PORT="${SERVE_PORT:-8080}"
 SYMBOLS="${SYMBOLS:-AAPL,MSFT,NVDA,TSLA,AMZN,META}"

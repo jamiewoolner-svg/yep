@@ -23,8 +23,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, List, Sequence, Tuple
+from zoneinfo import ZoneInfo
 
 
 STOOQ_URL = "https://stooq.com/q/d/l/"
@@ -57,6 +58,62 @@ POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "")
 POLYGON_MIN_GAP_SEC = float(os.getenv("POLYGON_MIN_GAP_SEC", "0.25"))
 _POLYGON_LOCK = threading.Lock()
 _POLYGON_NEXT_ALLOWED_TS = 0.0
+HISTORY_CACHE_TTL_SEC = max(0, int(os.getenv("HISTORY_CACHE_TTL_SEC", "300")))
+INTRADAY_CACHE_TTL_SEC = max(0, int(os.getenv("INTRADAY_CACHE_TTL_SEC", "90")))
+UNIVERSE_CACHE_TTL_SEC = max(0, int(os.getenv("UNIVERSE_CACHE_TTL_SEC", "21600")))
+_HISTORY_CACHE: dict[str, tuple[float, List[Candle]]] = {}
+_INTRADAY_CACHE: dict[str, tuple[float, List[Candle]]] = {}
+_UNIVERSE_CACHE: dict[str, tuple[float, List[str]]] = {}
+_CACHE_LOCK = threading.Lock()
+_MARKET_TZ = ZoneInfo("America/New_York")
+
+
+def _cache_get_candles(cache: dict[str, tuple[float, List[Candle]]], key: str, ttl_sec: int) -> List[Candle] | None:
+    if ttl_sec <= 0:
+        return None
+    now = time.time()
+    with _CACHE_LOCK:
+        item = cache.get(key)
+        if not item:
+            return None
+        ts, candles = item
+        if now - ts > ttl_sec:
+            cache.pop(key, None)
+            return None
+        return list(candles)
+
+
+def _cache_set_candles(cache: dict[str, tuple[float, List[Candle]]], key: str, ttl_sec: int, candles: List[Candle]) -> None:
+    if ttl_sec <= 0:
+        return
+    with _CACHE_LOCK:
+        cache[key] = (time.time(), list(candles))
+
+
+def _cache_get_symbols(key: str, ttl_sec: int) -> List[str] | None:
+    if ttl_sec <= 0:
+        return None
+    now = time.time()
+    with _CACHE_LOCK:
+        item = _UNIVERSE_CACHE.get(key)
+        if not item:
+            return None
+        ts, symbols = item
+        if now - ts > ttl_sec:
+            _UNIVERSE_CACHE.pop(key, None)
+            return None
+        return list(symbols)
+
+
+def _cache_set_symbols(key: str, ttl_sec: int, symbols: List[str]) -> None:
+    if ttl_sec <= 0:
+        return
+    with _CACHE_LOCK:
+        _UNIVERSE_CACHE[key] = (time.time(), list(symbols))
+
+
+def _from_epoch_market_time(ts_seconds: float) -> datetime:
+    return datetime.fromtimestamp(ts_seconds, tz=timezone.utc).astimezone(_MARKET_TZ).replace(tzinfo=None)
 
 
 @dataclass
@@ -487,61 +544,77 @@ def _fetch_polygon_aggs(symbol: str, multiplier: int, timespan: str, date_from: 
             "apiKey": key,
         }
     )
-    url = f"{path}?{query}"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (StockScannerCLI/1.0)"})
-
-    payload = None
+    next_url = f"{path}?{query}"
+    all_results: List[dict] = []
     last_exc: Exception | None = None
-    for attempt in range(8):
-        try:
-            # Global pacing so multi-thread scans don't blast the API.
-            with _POLYGON_LOCK:
-                now = time.time()
-                wait = max(0.0, _POLYGON_NEXT_ALLOWED_TS - now)
-                if wait > 0:
-                    time.sleep(wait)
-                # Reserve the next slot immediately.
-                globals()["_POLYGON_NEXT_ALLOWED_TS"] = time.time() + POLYGON_MIN_GAP_SEC
 
-            with urllib.request.urlopen(req, timeout=25) as response:
-                payload = json.loads(response.read().decode("utf-8", errors="replace"))
-            break
-        except urllib.error.HTTPError as exc:
-            last_exc = exc
-            if exc.code == 429:
-                retry_after = exc.headers.get("Retry-After")
-                try:
-                    backoff = float(retry_after) if retry_after else 1.0
-                except ValueError:
-                    backoff = 1.0
-                # Exponential component, capped to avoid runaway waits.
-                backoff = min(60.0, max(backoff, 1.0) * (1.6 ** attempt))
+    while next_url:
+        payload = None
+        req = urllib.request.Request(next_url, headers={"User-Agent": "Mozilla/5.0 (StockScannerCLI/1.0)"})
+        for attempt in range(8):
+            try:
+                # Global pacing so multi-thread scans don't blast the API.
                 with _POLYGON_LOCK:
-                    globals()["_POLYGON_NEXT_ALLOWED_TS"] = max(_POLYGON_NEXT_ALLOWED_TS, time.time() + backoff)
+                    now = time.time()
+                    wait = max(0.0, _POLYGON_NEXT_ALLOWED_TS - now)
+                    if wait > 0:
+                        time.sleep(wait)
+                    # Reserve the next slot immediately.
+                    globals()["_POLYGON_NEXT_ALLOWED_TS"] = time.time() + POLYGON_MIN_GAP_SEC
+
+                with urllib.request.urlopen(req, timeout=25) as response:
+                    payload = json.loads(response.read().decode("utf-8", errors="replace"))
+                break
+            except urllib.error.HTTPError as exc:
+                last_exc = exc
+                if exc.code == 429:
+                    retry_after = exc.headers.get("Retry-After")
+                    try:
+                        backoff = float(retry_after) if retry_after else 1.0
+                    except ValueError:
+                        backoff = 1.0
+                    # Exponential component, capped to avoid runaway waits.
+                    backoff = min(60.0, max(backoff, 1.0) * (1.6 ** attempt))
+                    with _POLYGON_LOCK:
+                        globals()["_POLYGON_NEXT_ALLOWED_TS"] = max(_POLYGON_NEXT_ALLOWED_TS, time.time() + backoff)
+                    continue
+                raise RuntimeError(f"failed to fetch {symbol} from Polygon: {exc}") from exc
+            except urllib.error.URLError as exc:
+                last_exc = exc
+                # transient network issue: small retry
+                time.sleep(min(5.0, 0.5 * (attempt + 1)))
                 continue
-            raise RuntimeError(f"failed to fetch {symbol} from Polygon: {exc}") from exc
-        except urllib.error.URLError as exc:
-            last_exc = exc
-            # transient network issue: small retry
-            time.sleep(min(5.0, 0.5 * (attempt + 1)))
-            continue
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"invalid Polygon response for {symbol}: {exc}") from exc
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"invalid Polygon response for {symbol}: {exc}") from exc
 
-    if payload is None:
-        raise RuntimeError(f"failed to fetch {symbol} from Polygon: {last_exc}")
+        if payload is None:
+            raise RuntimeError(f"failed to fetch {symbol} from Polygon: {last_exc}")
 
-    results = payload.get("results", [])
-    if not isinstance(results, list):
-        raise RuntimeError(f"unexpected Polygon payload for {symbol}")
+        results = payload.get("results", [])
+        if not isinstance(results, list):
+            raise RuntimeError(f"unexpected Polygon payload for {symbol}")
+        all_results.extend(results)
+
+        raw_next = payload.get("next_url")
+        if isinstance(raw_next, str) and raw_next.strip():
+            candidate = raw_next.strip()
+            if "apiKey=" not in candidate:
+                sep = "&" if "?" in candidate else "?"
+                candidate = f"{candidate}{sep}apiKey={urllib.parse.quote(key)}"
+            if candidate == next_url:
+                break
+            next_url = candidate
+        else:
+            next_url = ""
 
     candles: List[Candle] = []
-    for row in results:
+    for row in all_results:
         try:
             ts = float(row["t"]) / 1000.0
+            dt = _from_epoch_market_time(ts) if timespan == "minute" else datetime.utcfromtimestamp(ts)
             candles.append(
                 Candle(
-                    date=datetime.utcfromtimestamp(ts),
+                    date=dt,
                     open=float(row["o"]),
                     high=float(row["h"]),
                     low=float(row["l"]),
@@ -569,6 +642,10 @@ def fetch_polygon_intraday(symbol: str, interval_min: int = 5, lookback_days: in
 
 
 def fetch_sp500_symbols() -> List[str]:
+    cached = _cache_get_symbols("sp500", UNIVERSE_CACHE_TTL_SEC)
+    if cached is not None:
+        return cached
+
     req = urllib.request.Request(
         SP500_CONSTITUENTS_URL,
         headers={"User-Agent": "Mozilla/5.0 (StockScannerCLI/1.0)"},
@@ -589,10 +666,16 @@ def fetch_sp500_symbols() -> List[str]:
     if not symbols:
         raise RuntimeError("S&P 500 constituents source returned no symbols")
 
-    return _dedupe_symbols(symbols)
+    deduped = _dedupe_symbols(symbols)
+    _cache_set_symbols("sp500", UNIVERSE_CACHE_TTL_SEC, deduped)
+    return deduped
 
 
 def fetch_nasdaq100_symbols() -> List[str]:
+    cached = _cache_get_symbols("nasdaq100", UNIVERSE_CACHE_TTL_SEC)
+    if cached is not None:
+        return cached
+
     sources = [
         ("nasdaq", NASDAQ100_COMPANIES_URL, "html"),
         ("wikipedia", WIKIPEDIA_NASDAQ100_URL, "html"),
@@ -616,6 +699,7 @@ def fetch_nasdaq100_symbols() -> List[str]:
 
         # Nasdaq-100 is ~100 names; accept if parsing yields a strong majority.
         if len(symbols) >= 80:
+            _cache_set_symbols("nasdaq100", UNIVERSE_CACHE_TTL_SEC, symbols)
             return symbols
         last_error = f"{source_name} parsing returned too few symbols ({len(symbols)})"
 
@@ -716,7 +800,7 @@ def fetch_yahoo_history(symbol: str) -> List[Candle]:
         try:
             candles.append(
                 Candle(
-                    date=datetime.utcfromtimestamp(int(ts)),
+                    date=_from_epoch_market_time(float(ts)),
                     open=float(o),
                     high=float(h),
                     low=float(l),
@@ -735,26 +819,38 @@ def fetch_yahoo_history(symbol: str) -> List[Candle]:
 
 def fetch_history(symbol: str) -> List[Candle]:
     source = (DATA_SOURCE or "auto").lower()
-    if source == "polygon":
-        return fetch_polygon_history(symbol)
-    if source == "stooq":
-        try:
-            return fetch_stooq_history(symbol)
-        except RuntimeError:
-            return fetch_yahoo_history(symbol)
-    if source == "yahoo":
-        return fetch_yahoo_history(symbol)
+    cache_key = f"history:{source}:{symbol.upper()}"
+    cached = _cache_get_candles(_HISTORY_CACHE, cache_key, HISTORY_CACHE_TTL_SEC)
+    if cached is not None:
+        return cached
 
-    # auto: prefer Polygon if key exists, else fallback to Stooq
-    if POLYGON_API_KEY or os.getenv("POLYGON_API_KEY", ""):
+    candles: List[Candle]
+    if source == "polygon":
+        candles = fetch_polygon_history(symbol)
+    elif source == "stooq":
         try:
-            return fetch_polygon_history(symbol)
+            candles = fetch_stooq_history(symbol)
         except RuntimeError:
-            pass
-    try:
-        return fetch_stooq_history(symbol)
-    except RuntimeError:
-        return fetch_yahoo_history(symbol)
+            candles = fetch_yahoo_history(symbol)
+    elif source == "yahoo":
+        candles = fetch_yahoo_history(symbol)
+    else:
+        # auto: prefer Polygon if key exists, else fallback to Stooq
+        if POLYGON_API_KEY or os.getenv("POLYGON_API_KEY", ""):
+            try:
+                candles = fetch_polygon_history(symbol)
+            except RuntimeError:
+                candles = []
+        else:
+            candles = []
+        if not candles:
+            try:
+                candles = fetch_stooq_history(symbol)
+            except RuntimeError:
+                candles = fetch_yahoo_history(symbol)
+
+    _cache_set_candles(_HISTORY_CACHE, cache_key, HISTORY_CACHE_TTL_SEC, candles)
+    return list(candles)
 
 
 def fetch_stooq_intraday(symbol: str, interval_min: int = 5) -> List[Candle]:
@@ -879,25 +975,38 @@ def fetch_yahoo_intraday(symbol: str, interval_min: int = 1) -> List[Candle]:
 
 def fetch_intraday(symbol: str, interval_min: int = 5) -> List[Candle]:
     source = (DATA_SOURCE or "auto").lower()
-    if source == "polygon":
-        return fetch_polygon_intraday(symbol, interval_min=interval_min)
-    if source == "stooq":
-        try:
-            return fetch_stooq_intraday(symbol, interval_min=interval_min)
-        except RuntimeError:
-            return fetch_yahoo_intraday(symbol, interval_min=interval_min)
-    if source == "yahoo":
-        return fetch_yahoo_intraday(symbol, interval_min=interval_min)
+    interval = max(1, int(interval_min))
+    cache_key = f"intraday:{source}:{symbol.upper()}:{interval}"
+    cached = _cache_get_candles(_INTRADAY_CACHE, cache_key, INTRADAY_CACHE_TTL_SEC)
+    if cached is not None:
+        return cached
 
-    if POLYGON_API_KEY or os.getenv("POLYGON_API_KEY", ""):
+    candles: List[Candle]
+    if source == "polygon":
+        candles = fetch_polygon_intraday(symbol, interval_min=interval)
+    elif source == "stooq":
         try:
-            return fetch_polygon_intraday(symbol, interval_min=interval_min)
+            candles = fetch_stooq_intraday(symbol, interval_min=interval)
         except RuntimeError:
-            pass
-    try:
-        return fetch_stooq_intraday(symbol, interval_min=interval_min)
-    except RuntimeError:
-        return fetch_yahoo_intraday(symbol, interval_min=interval_min)
+            candles = fetch_yahoo_intraday(symbol, interval_min=interval)
+    elif source == "yahoo":
+        candles = fetch_yahoo_intraday(symbol, interval_min=interval)
+    else:
+        if POLYGON_API_KEY or os.getenv("POLYGON_API_KEY", ""):
+            try:
+                candles = fetch_polygon_intraday(symbol, interval_min=interval)
+            except RuntimeError:
+                candles = []
+        else:
+            candles = []
+        if not candles:
+            try:
+                candles = fetch_stooq_intraday(symbol, interval_min=interval)
+            except RuntimeError:
+                candles = fetch_yahoo_intraday(symbol, interval_min=interval)
+
+    _cache_set_candles(_INTRADAY_CACHE, cache_key, INTRADAY_CACHE_TTL_SEC, candles)
+    return list(candles)
 
 
 def resample_to_minutes(candles: Sequence[Candle], target_minutes: int = 233) -> List[Candle]:

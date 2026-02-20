@@ -76,9 +76,9 @@ This repo includes:
 
 Steps:
 1. Push this repo to GitHub.
-2. In Render, create a new Web Service from this repo.
+2. In Render, create a new Web Service from this repo (or use Blueprint sync from `render.yaml`).
 3. Build command: `pip install -r requirements-web.txt`
-4. Start command: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300`
+4. Start command: `python3 -m gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 300`
 5. Set env vars:
    - `POLYGON_API_KEY` = your real key
    - `SCANNER_DATA_SOURCE` = `polygon`

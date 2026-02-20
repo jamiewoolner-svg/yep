@@ -28,7 +28,6 @@ from stock_scanner import (
     POWS_MACD_SLOW,
     POWS_RSI_LENGTH,
     analyze_candles,
-    analyze_symbol,
     configure_data_source,
     fetch_nasdaq100_symbols,
     fetch_sp500_symbols,
@@ -65,6 +64,9 @@ _EVENT_CACHE_LOCK = threading.Lock()
 CHART_CACHE_TTL_SEC = int(os.getenv("CHART_CACHE_TTL_SEC", "300"))
 _CHART_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _CHART_CACHE_LOCK = threading.Lock()
+SCAN_SNAPSHOT_TTL_SEC = max(30, int(os.getenv("SCAN_SNAPSHOT_TTL_SEC", "180")))
+_SCAN_SNAPSHOT_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_SCAN_SNAPSHOT_LOCK = threading.Lock()
 
 
 def _http_get_text(url: str, timeout: int = EVENT_HTTP_TIMEOUT_SEC) -> str:
@@ -156,6 +158,76 @@ def _chart_cache_get(key: str) -> dict[str, Any] | None:
 def _chart_cache_set(key: str, payload: dict[str, Any]) -> None:
     with _CHART_CACHE_LOCK:
         _CHART_CACHE[key] = (time.time(), payload)
+
+
+def _scan_snapshot_get(key: str) -> dict[str, Any] | None:
+    now = time.time()
+    with _SCAN_SNAPSHOT_LOCK:
+        item = _SCAN_SNAPSHOT_CACHE.get(key)
+        if not item:
+            return None
+        ts, payload = item
+        if now - ts > SCAN_SNAPSHOT_TTL_SEC:
+            _SCAN_SNAPSHOT_CACHE.pop(key, None)
+            return None
+        return payload
+
+
+def _scan_snapshot_set(key: str, payload: dict[str, Any]) -> None:
+    with _SCAN_SNAPSHOT_LOCK:
+        _SCAN_SNAPSHOT_CACHE[key] = (time.time(), payload)
+
+
+def _scan_snapshot_key(symbol: str, args: SimpleNamespace) -> str:
+    source = str(getattr(args, "data_source", os.getenv("SCANNER_DATA_SOURCE", "auto"))).lower()
+    intraday_interval = max(1, int(getattr(args, "intraday_interval_min", 1) or 1))
+    return f"{symbol.upper()}:{source}:{intraday_interval}"
+
+
+def _build_symbol_snapshot(symbol: str, args: SimpleNamespace, include_intraday: bool) -> dict[str, Any] | None:
+    daily_candles = fetch_history(symbol)
+    daily = analyze_candles(symbol, daily_candles, "1D")
+    if not daily:
+        return None
+
+    snapshot: dict[str, Any] = {
+        "symbol": symbol.upper(),
+        "daily_candles": daily_candles,
+        "daily": daily,
+        "weekly": None,
+        "intraday": [],
+        "intraday_tfs": {},
+        "intraday_ready": False,
+    }
+
+    weekly_candles = _resample_daily_to_weekly(daily_candles)
+    snapshot["weekly"] = analyze_candles(symbol, weekly_candles, "1W") if weekly_candles else None
+
+    if include_intraday:
+        intraday_interval = max(1, int(getattr(args, "intraday_interval_min", 1) or 1))
+        intraday = fetch_intraday(symbol, interval_min=intraday_interval)
+        intraday_tfs: dict[int, Any | None] = {}
+        for minutes in (233, 60, 55, 34, 21, 13, 8, 5):
+            bars = resample_to_minutes(intraday, target_minutes=minutes)
+            intraday_tfs[minutes] = analyze_candles(symbol, bars, f"{minutes}m") if bars else None
+        snapshot["intraday"] = intraday
+        snapshot["intraday_tfs"] = intraday_tfs
+        snapshot["intraday_ready"] = True
+
+    return snapshot
+
+
+def _load_symbol_snapshot(symbol: str, args: SimpleNamespace, include_intraday: bool) -> dict[str, Any] | None:
+    key = _scan_snapshot_key(symbol, args)
+    cached = _scan_snapshot_get(key)
+    if cached and (not include_intraday or bool(cached.get("intraday_ready", False))):
+        return cached
+
+    built = _build_symbol_snapshot(symbol, args, include_intraday)
+    if built is None:
+        return None
+    _scan_snapshot_set(key, built)
+    return built
 
 
 def _fetch_fed_events(days_ahead: int = EVENT_LOOKAHEAD_DAYS) -> list[dict[str, Any]]:
@@ -905,13 +977,12 @@ def _passes_candidate_floor(result: Any, args: SimpleNamespace) -> bool:
     return bool(cross_age <= max(8, recent) or near_cross)
 
 
-def _precision_entry_ok(intraday: list[Candle], daily: Any, args: SimpleNamespace) -> bool:
+def _precision_entry_ok(intraday_tfs: dict[int, Any | None], daily: Any, args: SimpleNamespace) -> bool:
     # Course precision ladder: 21 (daily), 13 (233), 8/5 (55/34 style intraday refinement).
     direction = str(getattr(daily, "setup_direction", "bull")).lower()
     lookback = max(6, int(getattr(args, "cross_lookback", 6)))
-    for minutes, label in ((21, "21m"), (13, "13m"), (8, "8m"), (5, "5m")):
-        candles = resample_to_minutes(intraday, target_minutes=minutes)
-        tf = analyze_candles(daily.symbol, candles, label)
+    for minutes in (21, 13, 8, 5):
+        tf = intraday_tfs.get(minutes)
         if not tf:
             continue
         tf_dir = str(getattr(tf, "setup_direction", "")).lower()
@@ -930,7 +1001,21 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
     retries = 2
     for attempt in range(retries + 1):
         try:
-            daily = analyze_symbol(symbol)
+            scan_intraday_3x = bool(getattr(args, "scan_intraday_3x", False))
+            need_intraday = bool(
+                args.require_daily_and_233
+                or getattr(args, "require_hourly", False)
+                or getattr(args, "require_precision_entry", False)
+                or scan_intraday_3x
+            )
+            snapshot = _load_symbol_snapshot(symbol, args, include_intraday=need_intraday)
+            if not snapshot:
+                return None
+            daily_candles = snapshot.get("daily_candles") or []
+            daily_base = snapshot.get("daily")
+            if not daily_base:
+                return None
+            daily = copy.deepcopy(daily_base)
             if not daily:
                 return None
             strict_ok = passes_filters(daily, args)
@@ -949,29 +1034,24 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
             daily_recent_ok = _recent_lifecycle_window_ok(daily, daily_window_bars)
             tf233_recent_ok = False
 
-            daily_candles = fetch_history(symbol)
-
             need_secondary_confirmation = bool(
                 getattr(args, "require_secondary_confirmation", True)
                 and (args.require_daily_and_233 or getattr(args, "require_hourly", False))
             )
-            scan_intraday_3x = bool(getattr(args, "scan_intraday_3x", False))
 
-            if args.require_daily_and_233 or getattr(args, "require_hourly", False) or getattr(args, "require_precision_entry", False) or scan_intraday_3x:
-                intraday = fetch_intraday(symbol, interval_min=args.intraday_interval_min)
+            if need_intraday:
+                intraday_tfs: dict[int, Any | None] = snapshot.get("intraday_tfs") or {}
                 tf233 = None
                 secondary_pass = False
 
                 if args.require_daily_and_233:
-                    c233 = resample_to_minutes(intraday, target_minutes=233)
-                    tf233 = analyze_candles(symbol, c233, "233m")
+                    tf233 = intraday_tfs.get(233)
                     tf233_recent_ok = _recent_lifecycle_window_ok(tf233, tf233_window_bars)
                     if tf233 and passes_secondary_timeframe_filters(tf233, args):
                         secondary_pass = True
 
                 if getattr(args, "require_hourly", False):
-                    c60 = resample_to_minutes(intraday, target_minutes=60)
-                    tf60 = analyze_candles(symbol, c60, "60m")
+                    tf60 = intraday_tfs.get(60)
                     if tf60 and passes_secondary_timeframe_filters(tf60, args):
                         secondary_pass = True
 
@@ -979,10 +1059,8 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
 
                 # Compute 55/34 when needed for intraday 3x discovery, or if daily/233 didn't satisfy 3x.
                 if scan_intraday_3x or not (daily_has_3x or tf233_has_3x):
-                    c55 = resample_to_minutes(intraday, target_minutes=55)
-                    tf55 = analyze_candles(symbol, c55, "55m")
-                    c34 = resample_to_minutes(intraday, target_minutes=34)
-                    tf34 = analyze_candles(symbol, c34, "34m")
+                    tf55 = intraday_tfs.get(55)
+                    tf34 = intraday_tfs.get(34)
                     # Allow both with-trend and counter-trend 55/34 candidates; ranking handles quality.
                     tf55_has_3x = bool(tf55 and _has_triple_cross(tf55, lookback, gap_max))
                     tf34_has_3x = bool(tf34 and _has_triple_cross(tf34, lookback, gap_max))
@@ -990,8 +1068,7 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                 # Timeframe-to-trend mapping from the course:
                 # 3x on daily/233 => confirm trend with weekly.
                 if getattr(args, "require_weekly_context", False) and (daily_has_3x or tf233_has_3x):
-                    weekly_candles = _resample_daily_to_weekly(daily_candles)
-                    weekly = analyze_candles(symbol, weekly_candles, "1W")
+                    weekly = snapshot.get("weekly")
                     if not _weekly_context_ok(daily, weekly):
                         return None
 
@@ -1001,7 +1078,7 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
                     return None
 
                 if getattr(args, "require_precision_entry", False):
-                    if not _precision_entry_ok(intraday, daily, args):
+                    if not _precision_entry_ok(intraday_tfs, daily, args):
                         return None
 
             enforce_recent_gate = bool(getattr(args, "enforce_recent_lifecycle_gate", True))
@@ -1439,4 +1516,6 @@ th,td{border:1px solid #ddd;padding:6px;font-size:13px;text-align:right} th:firs
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5055, debug=False, use_reloader=False)
+    port = int(os.getenv("PORT", "5055"))
+    host = os.getenv("HOST", "0.0.0.0")
+    app.run(host=host, port=port, debug=False, use_reloader=False)
