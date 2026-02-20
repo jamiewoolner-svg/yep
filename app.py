@@ -481,6 +481,8 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
         "macd_bear_cross_age": analyzed.macd_bear_cross_age,
         "stoch_bear_cross_age": analyzed.stoch_bear_cross_age,
         "bb_expansion": _safe_num(analyzed.band_width_expansion, 3),
+        "bb_widen_start_age": int(getattr(analyzed, "band_widen_start_age", 999)),
+        "bb_widen_window_ok": bool(getattr(analyzed, "band_widen_window_ok", False)),
         "pre3x": _safe_num(max(analyzed.pre3x_bull_score, analyzed.pre3x_bear_score), 2),
         "hist_n": int(getattr(analyzed, "hist_setups_5y", 0)),
         "hist_wr": _safe_num(getattr(analyzed, "hist_win_rate_5y", 0.0) * 100.0, 1),

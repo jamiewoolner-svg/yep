@@ -120,6 +120,8 @@ class ScanResult:
     touched_outer_band_recent: bool
     outer_touch_age: int
     band_width_expansion: float
+    band_widen_start_age: int
+    band_widen_window_ok: bool
     liftoff_from_band: bool
     rejection_from_band: bool
     timeframe: str
@@ -1393,6 +1395,53 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         )
     ]
     bw_median = statistics.median(bw_recent) if bw_recent else math.nan
+    # Course timing rule: BB widening should begin roughly 5-14 bars before setup maturity.
+    band_widen_start_age = 999
+    band_widen_window_ok = False
+    if len(closes) >= 20 and not math.isnan(bw_now):
+        min_age = 5
+        max_age = 14
+        start_lo = max(0, last_idx - max_age)
+        start_hi = max(0, last_idx - min_age)
+        best_idx = -1
+        best_bw = math.inf
+        for i in range(start_lo, start_hi + 1):
+            if i >= len(bb_mid_series):
+                continue
+            mid_i = bb_mid_series[i]
+            up_i = bb_upper_series[i]
+            low_i = bb_lower_series[i]
+            if math.isnan(mid_i) or math.isnan(up_i) or math.isnan(low_i) or mid_i == 0:
+                continue
+            bw_i = (up_i - low_i) / mid_i
+            if bw_i < best_bw:
+                best_bw = bw_i
+                best_idx = i
+        if best_idx >= 0 and best_bw > 0 and bw_now > 0:
+            band_widen_start_age = last_idx - best_idx
+            step_count = 0
+            up_steps = 0
+            prev_bw = best_bw
+            for i in range(best_idx + 1, last_idx + 1):
+                if i >= len(bb_mid_series):
+                    continue
+                mid_i = bb_mid_series[i]
+                up_i = bb_upper_series[i]
+                low_i = bb_lower_series[i]
+                if math.isnan(mid_i) or math.isnan(up_i) or math.isnan(low_i) or mid_i == 0:
+                    continue
+                bw_i = (up_i - low_i) / mid_i
+                if bw_i >= prev_bw:
+                    up_steps += 1
+                step_count += 1
+                prev_bw = bw_i
+            growth = (bw_now - best_bw) / best_bw
+            up_ratio = (up_steps / step_count) if step_count > 0 else 0.0
+            band_widen_window_ok = (
+                min_age <= band_widen_start_age <= max_age
+                and growth >= 0.08
+                and up_ratio >= 0.55
+            )
 
     def _prox(gap: float, scale: float) -> float:
         if math.isnan(gap) or scale <= 0:
@@ -1502,6 +1551,7 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         band_action_quality = 1.0 if (rejection_from_band and outer_touch_age <= 3) else 0.0
         fresh_age = min(price_bear_cross_age, macd_bear_cross_age, stoch_bear_cross_age, outer_touch_age)
     spread_quality = _clamp01((band_width_expansion - 0.02) / 0.12)
+    widen_window_quality = 1.0 if band_widen_window_ok else 0.0
     fresh_quality = _clamp01(1.0 - (fresh_age / 3.0))
     target_quality = _clamp01(target_mid_pct / 0.012)
     rr_course_quality = _clamp01(rr_mid / 1.5)
@@ -1509,8 +1559,9 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         0.20 * trend_quality
         + 0.20 * momentum_quality
         + 0.20 * band_action_quality
-        + 0.15 * spread_quality
-        + 0.15 * fresh_quality
+        + 0.10 * spread_quality
+        + 0.15 * widen_window_quality
+        + 0.10 * fresh_quality
         + 0.05 * target_quality
         + 0.05 * rr_course_quality
     )
@@ -1592,6 +1643,8 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         touched_outer_band_recent=touched_outer_band_recent,
         outer_touch_age=outer_touch_age,
         band_width_expansion=band_width_expansion,
+        band_widen_start_age=band_widen_start_age,
+        band_widen_window_ok=band_widen_window_ok,
         liftoff_from_band=liftoff_from_band,
         rejection_from_band=rejection_from_band,
         timeframe=timeframe,
@@ -1750,6 +1803,10 @@ def _passes_directional_setup(
             min_setup_score = 35.0
         bull_ok = bull_ok and (result.target_mid_pct >= min_target_mid and result.options_setup_score >= min_setup_score)
         bear_ok = bear_ok and (result.target_mid_pct >= min_target_mid and result.options_setup_score >= min_setup_score)
+        # Enforce user rule: widening should start about 5-14 bars before "ready" setups.
+        if result.timeframe == "1D":
+            bull_ok = bull_ok and bool(getattr(result, "band_widen_window_ok", False))
+            bear_ok = bear_ok and bool(getattr(result, "band_widen_window_ok", False))
 
     # Avoid extremely stretched end-of-move candles in either direction.
     bull_ok = bull_ok and not (result.close > result.bb_upper * 1.03)
