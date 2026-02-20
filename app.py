@@ -131,8 +131,8 @@ def _result_row(analyzed: Any) -> dict[str, Any]:
     }
 
 
-def _pows_args() -> SimpleNamespace:
-    """Locked scanner profile: no UI tuning, fixed POWS-oriented rules."""
+def _strategy_args() -> SimpleNamespace:
+    """Locked scanner profile: no UI tuning, fixed strategy rules."""
     return SimpleNamespace(
         min_price=5.0,
         max_price=1000.0,
@@ -198,7 +198,7 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     developing.min_adx = min(developing.min_adx, 6.0)
     developing.require_daily_and_233 = True
 
-    return [("pows_strict", strict), ("pows_confirm", confirm), ("pows_developing", developing)]
+    return [("strict", strict), ("confirm", confirm), ("developing", developing)]
 
 
 def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
@@ -294,7 +294,7 @@ def scan_stream() -> Response:
         payload = json.dumps({"type": "error", "message": str(exc)})
         return Response(payload + "\n", mimetype="application/x-ndjson")
 
-    base_args = _pows_args()
+    base_args = _strategy_args()
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = max(0, int(base_args.max_retries))
     tiers = _strict_fallback_tiers(base_args) if base_args.auto_fallback else [("strict", base_args)]
