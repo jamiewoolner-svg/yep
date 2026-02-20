@@ -129,11 +129,12 @@
     .err { color: var(--danger); font-weight: 700; margin-top: 8px; }
     #empty-note { margin-top: 10px; }
     .chart-box {
-      height: 760px;
+      height: 700px;
       margin-top: 10px;
       border: 1px solid var(--line);
       border-radius: 12px;
       background: #132230;
+      overflow: hidden;
     }
     @media (max-width: 900px) {
       .wrap { margin-top: 16px; }
@@ -207,6 +208,15 @@
     const chartModels = [];
 
     function pick(idx, series) { return idx.map(i => series[i]); }
+    function pickRecent(idx, series, maxPoints = 4) {
+      const start = Math.max(0, idx.length - maxPoints);
+      const subset = idx.slice(start);
+      return subset.map(i => series[i]);
+    }
+    function recentIdx(idx, maxPoints = 4) {
+      const start = Math.max(0, idx.length - maxPoints);
+      return idx.slice(start);
+    }
 
     function sortResultRows() {
       const rows = Array.from(resultsBody.querySelectorAll('tr'));
@@ -288,7 +298,9 @@
       const eventLineColor = {high: '#f26d6d', medium: '#f2bf5a', low: '#6da7f2'};
       const eventShapes = [];
       const eventAnnotations = [];
-      for (const ev of (view.events || [])) {
+      const events = (view.events || []).slice(-8);
+      const annotatedEvents = events.slice(-3);
+      for (const ev of events) {
         const c = eventLineColor[ev.severity] || '#f2bf5a';
         eventShapes.push({
           type: 'line',
@@ -300,6 +312,9 @@
           y1: 1,
           line: {color: c, width: 1, dash: 'dot'}
         });
+      }
+      for (const ev of annotatedEvents) {
+        const c = eventLineColor[ev.severity] || '#f2bf5a';
         eventAnnotations.push({
           xref: 'x',
           yref: 'paper',
@@ -309,7 +324,8 @@
           showarrow: false,
           font: {size: 10, color: c},
           xanchor: 'left',
-          align: 'left'
+          align: 'left',
+          bgcolor: 'rgba(19,34,48,0.75)'
         });
       }
       const traces = [
@@ -331,16 +347,16 @@
         {x, y: view.sma200, name: 'SMA200', line: {color: '#9467bd'}, xaxis: 'x', yaxis: 'y'},
         {x, y: view.bb_upper, name: 'BB Upper', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
         {x, y: view.bb_lower, name: 'BB Lower', line: {color: '#7f7f7f', dash: 'dot'}, xaxis: 'x', yaxis: 'y'},
-        {x: pick(view.sma_cross_up_idx, x), y: pick(view.sma_cross_up_idx, view.close), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 8}, name: 'SMA Up', xaxis: 'x', yaxis: 'y'},
-        {x: pick(view.sma_cross_down_idx, x), y: pick(view.sma_cross_down_idx, view.close), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 8}, name: 'SMA Down', xaxis: 'x', yaxis: 'y'},
+        {x: pickRecent(view.sma_cross_up_idx, x), y: pickRecent(view.sma_cross_up_idx, view.close), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 8}, name: 'SMA Up', xaxis: 'x', yaxis: 'y'},
+        {x: pickRecent(view.sma_cross_down_idx, x), y: pickRecent(view.sma_cross_down_idx, view.close), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 8}, name: 'SMA Down', xaxis: 'x', yaxis: 'y'},
         {x, y: view.macd, name: 'MACD', line: {color: '#17becf'}, xaxis: 'x2', yaxis: 'y2'},
         {x, y: view.macd_signal, name: 'Signal', line: {color: '#bcbd22'}, xaxis: 'x2', yaxis: 'y2'},
-        {x: pick(view.macd_cross_up_idx, x), y: pick(view.macd_cross_up_idx, view.macd), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'MACD Up', xaxis: 'x2', yaxis: 'y2'},
-        {x: pick(view.macd_cross_down_idx, x), y: pick(view.macd_cross_down_idx, view.macd), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'MACD Down', xaxis: 'x2', yaxis: 'y2'},
+        {x: pickRecent(view.macd_cross_up_idx, x), y: pickRecent(view.macd_cross_up_idx, view.macd), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'MACD Up', xaxis: 'x2', yaxis: 'y2'},
+        {x: pickRecent(view.macd_cross_down_idx, x), y: pickRecent(view.macd_cross_down_idx, view.macd), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'MACD Down', xaxis: 'x2', yaxis: 'y2'},
         {x, y: view.stoch_k, name: 'Stoch %K', line: {color: '#e377c2'}, xaxis: 'x3', yaxis: 'y3'},
         {x, y: view.stoch_d, name: 'Stoch %D', line: {color: '#8c564b'}, xaxis: 'x3', yaxis: 'y3'},
-        {x: pick(view.stoch_cross_up_idx, x), y: pick(view.stoch_cross_up_idx, view.stoch_k), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'Stoch Up', xaxis: 'x3', yaxis: 'y3'},
-        {x: pick(view.stoch_cross_down_idx, x), y: pick(view.stoch_cross_down_idx, view.stoch_k), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'Stoch Down', xaxis: 'x3', yaxis: 'y3'}
+        {x: pickRecent(view.stoch_cross_up_idx, x), y: pickRecent(view.stoch_cross_up_idx, view.stoch_k), mode: 'markers', marker: {color: 'green', symbol: 'triangle-up', size: 7}, name: 'Stoch Up', xaxis: 'x3', yaxis: 'y3'},
+        {x: pickRecent(view.stoch_cross_down_idx, x), y: pickRecent(view.stoch_cross_down_idx, view.stoch_k), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'Stoch Down', xaxis: 'x3', yaxis: 'y3'}
       ];
 
       Plotly.newPlot(plotId, traces, {
@@ -348,7 +364,8 @@
         paper_bgcolor: '#132230',
         plot_bgcolor: '#132230',
         font: {color: '#d8e9f6'},
-        legend: {orientation: 'h'},
+        hovermode: 'x unified',
+        legend: {orientation: 'h', y: -0.08, font: {size: 10}},
         grid: {rows: 3, columns: 1, pattern: 'independent', roworder: 'top to bottom'},
         shapes: eventShapes,
         annotations: eventAnnotations,
