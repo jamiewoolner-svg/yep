@@ -313,14 +313,7 @@
         <div class="chart-controls">
           <span>Candle Timeframe</span>
           <select id="${model.id}-tf">
-            <option value="1D">1D</option>
-            <option value="233m">233m</option>
-            <option value="55m">55m</option>
-            <option value="34m">34m</option>
-            <option value="21m">21m</option>
-            <option value="13m">13m</option>
-            <option value="8m">8m</option>
-            <option value="5m">5m</option>
+            <option value="60m">60m</option>
           </select>
         </div>
         <div id="${model.id}-plot" class="chart-box"></div>
@@ -339,7 +332,7 @@
         tier: tier || 'ranked',
         row,
         rank: computeRank(row),
-        tf: '1D',
+        tf: '60m',
         chart: null,
         loading: false,
         card,

@@ -740,17 +740,17 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
 
 
 def _ranked_scan_args() -> SimpleNamespace:
-    """Single-pass ranked scan over all symbols with broad-but-rule-based filtering."""
+    """Single-pass ranked scan over all symbols with hourly-only setup confirmation."""
     args = _strategy_args()
     args.require_macd_stoch_cross = False
     args.require_band_liftoff = False
     args.bb_spread_watchlist = True
     args.require_daily_and_233 = False
-    args.require_hourly = False
+    args.require_hourly = True
     args.require_weekly_context = False
     args.require_precision_entry = False
-    args.require_secondary_confirmation = False
-    args.scan_intraday_3x = True
+    args.require_secondary_confirmation = True
+    args.scan_intraday_3x = False
     args.max_macd_cross_age = min(int(getattr(args, "max_macd_cross_age", 3)), 3)
     args.max_stoch_cross_age = min(int(getattr(args, "max_stoch_cross_age", 3)), 3)
     args.cross_lookback = max(args.cross_lookback, 14)
@@ -763,26 +763,6 @@ def _ranked_scan_args() -> SimpleNamespace:
     # Align with "within 2 weeks" BB timing rule.
     args.band_touch_lookback = max(args.band_touch_lookback, 14)
     args.min_course_pattern_score = max(float(getattr(args, "min_course_pattern_score", 55.0)), 62.0)
-
-    # Align scan emphasis with course seasonality:
-    # Oct-Jan: prefer larger daily/233 swings; May-Sep: favor smaller intraday swings.
-    month = date.today().month
-    if month in (10, 11, 12, 1):
-        args.require_daily_and_233 = True
-        args.require_weekly_context = True
-        args.require_hourly = False
-        args.cross_lookback = min(args.cross_lookback, 10)
-    elif month in (5, 6, 7, 8, 9):
-        args.require_daily_and_233 = False
-        args.require_weekly_context = False
-        args.require_hourly = True
-        args.cross_lookback = max(args.cross_lookback, 12)
-    else:
-        # Transition season: allow both contexts but keep quality floor high.
-        args.require_daily_and_233 = True
-        args.require_weekly_context = False
-        args.require_hourly = True
-        args.cross_lookback = max(args.cross_lookback, 10)
     return args
 
 
@@ -1122,7 +1102,7 @@ def build_chart_payload(symbol: str, days: int, requested_timeframes: list[str] 
         if daily_chart:
             timeframes["1D"] = daily_chart
 
-    intraday_keep = {233: 120, 55: 90, 34: 80, 21: 70, 13: 60, 8: 50, 5: 40}
+    intraday_keep = {60: 120}
     intraday_targets: list[int]
     if normalized:
         intraday_targets = []
@@ -1135,7 +1115,7 @@ def build_chart_payload(symbol: str, days: int, requested_timeframes: list[str] 
                 if minutes in intraday_keep:
                     intraday_targets.append(minutes)
     else:
-        intraday_targets = [233, 55, 34, 21, 13, 8, 5]
+        intraday_targets = [60]
     try:
         if intraday_targets:
             intraday = fetch_intraday(symbol, interval_min=1)
@@ -1205,9 +1185,10 @@ def scan_stream() -> Response:
 
     def _tuned_args(step: int) -> SimpleNamespace:
         a = copy.deepcopy(base_args)
-        # Keep scan responsive: prioritize daily-first detection in live scans.
+        # Keep scan responsive: hourly-only confirmation.
         a.require_daily_and_233 = False
-        a.require_hourly = False
+        a.require_hourly = True
+        a.require_secondary_confirmation = True
         a.require_precision_entry = False
         a.scan_intraday_3x = False
         a.enforce_recent_lifecycle_gate = True
