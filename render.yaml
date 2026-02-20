@@ -21,4 +21,5 @@ projects:
       buildCommand: pip install -r requirements-web.txt
       startCommand: python3 -m gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads
         4 --timeout 300
+      healthCheckPath: /healthz
       autoDeployTrigger: commit
