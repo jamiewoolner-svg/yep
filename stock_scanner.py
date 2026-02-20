@@ -1682,8 +1682,10 @@ def _passes_directional_setup(
     require_band_liftoff = args.require_band_liftoff
     bb_spread_watchlist = getattr(args, "bb_spread_watchlist", False)
     require_simultaneous_cross = args.require_simultaneous_cross
-    max_macd_cross_age = max(1, int(getattr(args, "max_macd_cross_age", 3)))
-    max_stoch_cross_age = max(1, int(getattr(args, "max_stoch_cross_age", 3)))
+    # Hard recency ceiling: only current/potential setups near present are allowed.
+    recent_cross_limit = 3
+    max_macd_cross_age = min(max(1, int(getattr(args, "max_macd_cross_age", 3))), recent_cross_limit)
+    max_stoch_cross_age = min(max(1, int(getattr(args, "max_stoch_cross_age", 3))), recent_cross_limit)
     want_bull, want_bear = _direction_match(result, args)
 
     bull_ok = True
@@ -1832,6 +1834,8 @@ def _passes_directional_setup(
 
     # Freshness gate: keep surfaced daily setups in-the-moment (or very recent).
     max_setup_age = int(getattr(args, "max_setup_age", 0) or 0)
+    if max_setup_age > 0:
+        max_setup_age = min(max_setup_age, recent_cross_limit)
     if not secondary_confirmation and result.timeframe == "1D" and max_setup_age > 0:
         bull_age = min(result.price_cross_age, result.macd_cross_age, result.stoch_cross_age, result.outer_touch_age)
         bear_age = min(result.price_bear_cross_age, result.macd_bear_cross_age, result.stoch_bear_cross_age, result.outer_touch_age)
