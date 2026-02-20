@@ -291,10 +291,37 @@
       }
       const tf = model.tf || '1D';
       const chartBundle = model.chart;
-      const view = chartBundle.timeframes[tf] || chartBundle.timeframes['1D'] || Object.values(chartBundle.timeframes)[0];
+      const rawView = chartBundle.timeframes[tf] || chartBundle.timeframes['1D'] || Object.values(chartBundle.timeframes)[0];
+      const trimByTf = { '1D': 320, '233m': 260, '55m': 340, '34m': 380, '21m': 420, '13m': 500, '8m': 620, '5m': 760 };
+      const keep = trimByTf[tf] || 320;
+      const start = Math.max(0, (rawView?.dates?.length || 0) - keep);
+      const view = {
+        ...rawView,
+        dates: (rawView?.dates || []).slice(start),
+        open: (rawView?.open || []).slice(start),
+        high: (rawView?.high || []).slice(start),
+        low: (rawView?.low || []).slice(start),
+        close: (rawView?.close || []).slice(start),
+        sma50: (rawView?.sma50 || []).slice(start),
+        sma89: (rawView?.sma89 || []).slice(start),
+        sma200: (rawView?.sma200 || []).slice(start),
+        bb_upper: (rawView?.bb_upper || []).slice(start),
+        bb_lower: (rawView?.bb_lower || []).slice(start),
+        macd: (rawView?.macd || []).slice(start),
+        macd_signal: (rawView?.macd_signal || []).slice(start),
+        stoch_k: (rawView?.stoch_k || []).slice(start),
+        stoch_d: (rawView?.stoch_d || []).slice(start),
+        sma_cross_up_idx: (rawView?.sma_cross_up_idx || []).map(i => i - start).filter(i => i >= 0),
+        sma_cross_down_idx: (rawView?.sma_cross_down_idx || []).map(i => i - start).filter(i => i >= 0),
+        macd_cross_up_idx: (rawView?.macd_cross_up_idx || []).map(i => i - start).filter(i => i >= 0),
+        macd_cross_down_idx: (rawView?.macd_cross_down_idx || []).map(i => i - start).filter(i => i >= 0),
+        stoch_cross_up_idx: (rawView?.stoch_cross_up_idx || []).map(i => i - start).filter(i => i >= 0),
+        stoch_cross_down_idx: (rawView?.stoch_cross_down_idx || []).map(i => i - start).filter(i => i >= 0)
+      };
       if (!view) return;
 
       const x = view.dates;
+      const intraday = String(view.timeframe || '').endsWith('m');
       const eventLineColor = {high: '#f26d6d', medium: '#f2bf5a', low: '#6da7f2'};
       const eventShapes = [];
       const eventAnnotations = [];
@@ -369,7 +396,16 @@
         grid: {rows: 3, columns: 1, pattern: 'independent', roworder: 'top to bottom'},
         shapes: eventShapes,
         annotations: eventAnnotations,
-        xaxis: {domain: [0, 1], anchor: 'y', showgrid: true, gridcolor: '#2a3d4e', rangeslider: {visible: false}},
+        xaxis: {
+          domain: [0, 1],
+          anchor: 'y',
+          type: 'date',
+          showgrid: true,
+          gridcolor: '#2a3d4e',
+          rangeslider: {visible: false},
+          tickformat: intraday ? '%m-%d %H:%M' : '%Y-%m-%d',
+          rangebreaks: intraday ? [{bounds: ['sat', 'mon']}, {pattern: 'hour', bounds: [16, 9.5]}] : []
+        },
         yaxis: {domain: [0.52, 1], title: 'Price', showgrid: true, gridcolor: '#2a3d4e'},
         xaxis2: {domain: [0, 1], anchor: 'y2', showgrid: true, gridcolor: '#2a3d4e', matches: 'x'},
         yaxis2: {domain: [0.26, 0.48], title: 'MACD', showgrid: true, gridcolor: '#2a3d4e', zeroline: true, zerolinecolor: '#4f6f85'},
