@@ -7,16 +7,16 @@
   <script defer src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <style>
     :root {
-      --bg: #eef2f5;
-      --bg2: #dde7ef;
-      --card: #ffffff;
-      --ink: #12222f;
-      --muted: #4f6677;
-      --line: #cfdce5;
-      --accent: #0b7fab;
-      --accent-dark: #075f80;
-      --danger: #8a1d1d;
-      --shadow: 0 14px 30px rgba(11, 45, 69, 0.10);
+      --bg: #0f1720;
+      --bg2: #121e29;
+      --card: #1b2a37;
+      --ink: #e6eff7;
+      --muted: #9db0c0;
+      --line: #2c3f4f;
+      --accent: #2fa4d5;
+      --accent-dark: #1b86b4;
+      --danger: #cc4b4b;
+      --shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
     }
     * { box-sizing: border-box; }
     body {
@@ -24,14 +24,14 @@
       font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
       color: var(--ink);
       background:
-        radial-gradient(1200px 600px at 6% 0%, #d9edf8 0%, transparent 60%),
-        radial-gradient(900px 450px at 94% 14%, #e6f0d8 0%, transparent 55%),
+        radial-gradient(1200px 600px at 6% 0%, #1c3d4f 0%, transparent 60%),
+        radial-gradient(900px 450px at 94% 14%, #2a3648 0%, transparent 55%),
         linear-gradient(180deg, var(--bg), var(--bg2));
       min-height: 100vh;
     }
     .wrap { max-width: 1240px; margin: 28px auto; padding: 0 16px 24px; }
     .card {
-      background: linear-gradient(180deg, rgba(255,255,255,0.98), #ffffff);
+      background: linear-gradient(180deg, rgba(30,44,56,0.98), #1b2a37);
       border: 1px solid var(--line);
       border-radius: 16px;
       box-shadow: var(--shadow);
@@ -52,13 +52,13 @@
       padding: 9px 10px;
       font: inherit;
       color: var(--ink);
-      background: #fff;
+      background: #14222f;
       transition: border-color 0.15s ease, box-shadow 0.15s ease;
     }
     input:focus, select:focus {
       outline: 0;
       border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(11, 127, 171, 0.15);
+      box-shadow: 0 0 0 3px rgba(47, 164, 213, 0.22);
     }
     .checks { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
     .checks label {
@@ -68,7 +68,7 @@
       margin: 0;
       font-size: 13px;
       color: var(--ink);
-      background: #f5f9fc;
+      background: #152432;
       border: 1px solid var(--line);
       border-radius: 999px;
       padding: 6px 10px;
@@ -97,17 +97,17 @@
       min-height: 22px;
       padding: 6px 10px;
       border-radius: 8px;
-      background: #edf7fc;
-      border: 1px solid #c9e4f1;
+      background: #132536;
+      border: 1px solid #29506a;
     }
     .metrics { display: flex; gap: 10px; font-size: 12px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; }
-    .metrics span { background: #f5f9fc; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
+    .metrics span { background: #152432; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
     .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 980px; background: #fff; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 980px; background: #132230; }
     th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: right; white-space: nowrap; }
-    th { position: sticky; top: 0; background: #f1f7fb; color: #1f3848; font-weight: 700; z-index: 1; }
+    th { position: sticky; top: 0; background: #1c3242; color: #d8e9f6; font-weight: 700; z-index: 1; }
     th:first-child, td:first-child { text-align: left; }
-    tbody tr:nth-child(even) { background: #fafcfe; }
+    tbody tr:nth-child(even) { background: #172838; }
     .err { color: var(--danger); font-weight: 700; margin-top: 8px; }
     #empty-note { margin-top: 10px; }
     .chart-box {
@@ -115,7 +115,7 @@
       margin-top: 10px;
       border: 1px solid var(--line);
       border-radius: 12px;
-      background: #fff;
+      background: #132230;
     }
     @media (max-width: 900px) {
       .wrap { margin-top: 16px; }
@@ -310,16 +310,17 @@
 
       Plotly.newPlot(id, traces, {
         margin: {l: 50, r: 20, t: 20, b: 30},
-        paper_bgcolor: '#fff',
-        plot_bgcolor: '#fff',
+        paper_bgcolor: '#132230',
+        plot_bgcolor: '#132230',
+        font: {color: '#d8e9f6'},
         legend: {orientation: 'h'},
         grid: {rows: 3, columns: 1, pattern: 'independent', roworder: 'top to bottom'},
-        xaxis: {domain: [0, 1], anchor: 'y', showgrid: true, gridcolor: '#edf2f6'},
-        yaxis: {domain: [0.52, 1], title: 'Price', showgrid: true, gridcolor: '#edf2f6'},
-        xaxis2: {domain: [0, 1], anchor: 'y2', showgrid: true, gridcolor: '#edf2f6'},
-        yaxis2: {domain: [0.26, 0.48], title: 'MACD', showgrid: true, gridcolor: '#edf2f6', zeroline: true, zerolinecolor: '#999'},
-        xaxis3: {domain: [0, 1], anchor: 'y3', showgrid: true, gridcolor: '#edf2f6'},
-        yaxis3: {domain: [0, 0.22], title: 'StochRSI', range: [0, 100], showgrid: true, gridcolor: '#edf2f6', tickvals: [20, 50, 80]}
+        xaxis: {domain: [0, 1], anchor: 'y', showgrid: true, gridcolor: '#2a3d4e'},
+        yaxis: {domain: [0.52, 1], title: 'Price', showgrid: true, gridcolor: '#2a3d4e'},
+        xaxis2: {domain: [0, 1], anchor: 'y2', showgrid: true, gridcolor: '#2a3d4e'},
+        yaxis2: {domain: [0.26, 0.48], title: 'MACD', showgrid: true, gridcolor: '#2a3d4e', zeroline: true, zerolinecolor: '#4f6f85'},
+        xaxis3: {domain: [0, 1], anchor: 'y3', showgrid: true, gridcolor: '#2a3d4e'},
+        yaxis3: {domain: [0, 0.22], title: 'StochRSI', range: [0, 100], showgrid: true, gridcolor: '#2a3d4e', tickvals: [20, 50, 80]}
       }, {responsive: true});
     }
 
