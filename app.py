@@ -35,6 +35,16 @@ from stock_scanner import (
 app = Flask(__name__)
 
 
+def _safe_num(value: Any, ndigits: int = 3) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if math.isnan(number) or math.isinf(number):
+        return 0.0
+    return round(number, ndigits)
+
+
 def _as_float(form: Any, key: str, default: float) -> float:
     raw = str(form.get(key, "")).strip()
     if not raw:
@@ -53,10 +63,10 @@ def _build_args(form: Any) -> SimpleNamespace:
     return SimpleNamespace(
         min_price=_as_float(form, "min_price", 5.0),
         max_price=_as_float(form, "max_price", 1000.0),
-        min_dollar_volume=_as_float(form, "min_dollar_volume", 10_000_000.0),
-        max_rsi=_as_float(form, "max_rsi", 65.0),
-        max_stoch_rsi_k=_as_float(form, "max_stoch_rsi_k", 80.0),
-        min_adx=_as_float(form, "min_adx", 18.0),
+        min_dollar_volume=_as_float(form, "min_dollar_volume", 2_000_000.0),
+        max_rsi=_as_float(form, "max_rsi", 80.0),
+        max_stoch_rsi_k=_as_float(form, "max_stoch_rsi_k", 95.0),
+        min_adx=_as_float(form, "min_adx", 10.0),
         require_uptrend=(form.get("require_uptrend") == "on"),
         require_breakout=(form.get("require_breakout") == "on"),
         require_macd_bull=(form.get("require_macd_bull") == "on"),
@@ -73,7 +83,7 @@ def _build_args(form: Any) -> SimpleNamespace:
         auto_fallback=(form.get("auto_fallback") == "on"),
         no_skips=(form.get("no_skips") == "on"),
         max_retries=_as_int(form, "max_retries", 4),
-        data_source=str(form.get("data_source", "polygon")),
+        data_source=str(form.get("data_source", "auto")),
         polygon_api_key=str(form.get("polygon_api_key", "")),
         pows=(form.get("pows") == "on"),
         verbose=False,
@@ -87,20 +97,20 @@ def _to_json_series(values: list[float]) -> list[float | None]:
 def _result_row(analyzed: Any) -> dict[str, Any]:
     return {
         "symbol": analyzed.symbol,
-        "close": analyzed.close,
-        "sma50": analyzed.sma50,
-        "sma89": analyzed.sma89,
-        "sma200": analyzed.sma200,
-        "stoch_k": analyzed.stoch_rsi_k,
-        "macd_hist": analyzed.macd - analyzed.macd_signal,
-        "adx": analyzed.adx14,
+        "close": _safe_num(analyzed.close, 2),
+        "sma50": _safe_num(analyzed.sma50, 2),
+        "sma89": _safe_num(analyzed.sma89, 2),
+        "sma200": _safe_num(analyzed.sma200, 2),
+        "stoch_k": _safe_num(analyzed.stoch_rsi_k, 2),
+        "macd_hist": _safe_num(analyzed.macd - analyzed.macd_signal, 3),
+        "adx": _safe_num(analyzed.adx14, 2),
         "macd_cross_age": analyzed.macd_cross_age,
         "stoch_cross_age": analyzed.stoch_cross_age,
         "macd_bear_cross_age": analyzed.macd_bear_cross_age,
         "stoch_bear_cross_age": analyzed.stoch_bear_cross_age,
-        "bb_expansion": analyzed.band_width_expansion,
+        "bb_expansion": _safe_num(analyzed.band_width_expansion, 3),
         "dollar_volume": format_money(analyzed.dollar_volume20),
-        "score": analyzed.score,
+        "score": _safe_num(analyzed.score, 3),
     }
 
 
@@ -109,26 +119,28 @@ def _strict_fallback_tiers(base_args: SimpleNamespace) -> list[tuple[str, Simple
     strict.pows = True
     strict.require_macd_stoch_cross = True
     strict.require_band_liftoff = True
-    strict.require_simultaneous_cross = True
+    strict.require_simultaneous_cross = False
     strict.require_daily_and_233 = True
-    strict.cross_lookback = min(strict.cross_lookback, 3)
-    strict.band_touch_lookback = min(strict.band_touch_lookback, 4)
-    strict.min_band_expansion = max(strict.min_band_expansion, 0.08)
-    strict.min_adx = max(strict.min_adx, 18.0)
+    strict.cross_lookback = min(strict.cross_lookback, 5)
+    strict.band_touch_lookback = min(strict.band_touch_lookback, 8)
+    strict.min_band_expansion = max(strict.min_band_expansion, 0.03)
+    strict.min_adx = max(strict.min_adx, 10.0)
 
     medium = copy.deepcopy(strict)
     medium.require_simultaneous_cross = False
-    medium.cross_lookback = max(medium.cross_lookback, 5)
-    medium.band_touch_lookback = max(medium.band_touch_lookback, 8)
-    medium.min_band_expansion = min(medium.min_band_expansion, 0.03)
-    medium.min_adx = min(medium.min_adx, 14.0)
+    medium.require_daily_and_233 = False
+    medium.cross_lookback = max(medium.cross_lookback, 7)
+    medium.band_touch_lookback = max(medium.band_touch_lookback, 10)
+    medium.min_band_expansion = min(medium.min_band_expansion, 0.01)
+    medium.min_adx = min(medium.min_adx, 8.0)
 
     loose = copy.deepcopy(medium)
-    loose.require_daily_and_233 = False
-    loose.cross_lookback = max(loose.cross_lookback, 8)
+    loose.pows = False
+    loose.require_macd_stoch_cross = False
+    loose.cross_lookback = max(loose.cross_lookback, 10)
     loose.band_touch_lookback = max(loose.band_touch_lookback, 12)
     loose.min_band_expansion = min(loose.min_band_expansion, 0.0)
-    loose.min_adx = min(loose.min_adx, 10.0)
+    loose.min_adx = min(loose.min_adx, 5.0)
 
     return [("strict", strict), ("medium", medium), ("loose", loose)]
 
@@ -217,10 +229,10 @@ def index() -> str:
         "plot_days": 260,
         "min_price": 5.0,
         "max_price": 1000.0,
-        "min_dollar_volume": 10_000_000.0,
-        "max_rsi": 65.0,
-        "max_stoch_rsi_k": 80.0,
-        "min_adx": 18.0,
+        "min_dollar_volume": 2_000_000.0,
+        "max_rsi": 80.0,
+        "max_stoch_rsi_k": 95.0,
+        "min_adx": 10.0,
         "require_uptrend": False,
         "require_breakout": False,
         "require_macd_bull": False,
@@ -229,15 +241,15 @@ def index() -> str:
         "require_simultaneous_cross": False,
         "require_band_liftoff": True,
         "signal_direction": "both",
-        "cross_lookback": 4,
-        "band_touch_lookback": 6,
-        "min_band_expansion": 0.05,
-        "require_daily_and_233": True,
+        "cross_lookback": 5,
+        "band_touch_lookback": 8,
+        "min_band_expansion": 0.03,
+        "require_daily_and_233": False,
         "intraday_interval_min": 5,
         "auto_fallback": True,
-        "no_skips": True,
+        "no_skips": False,
         "max_retries": 4,
-        "data_source": "polygon",
+        "data_source": "auto",
         "polygon_api_key": "",
         "workers": 16,
     }

@@ -73,12 +73,16 @@ class ScanResult:
     avg_volume20: float
     dollar_volume20: float
     breakout_20d: bool
+    price_cross_age: int
+    price_bear_cross_age: int
     macd_cross_age: int
     stoch_cross_age: int
     dual_cross_gap: int
     macd_bear_cross_age: int
     stoch_bear_cross_age: int
     dual_bear_cross_gap: int
+    triple_cross_gap: int
+    triple_bear_cross_gap: int
     touched_outer_band_recent: bool
     outer_touch_age: int
     band_width_expansion: float
@@ -120,25 +124,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--min-dollar-volume",
         type=float,
-        default=10_000_000.0,
+        default=2_000_000.0,
         help="Minimum 20-day average dollar volume (price * volume).",
     )
     parser.add_argument(
         "--max-rsi",
         type=float,
-        default=65.0,
+        default=80.0,
         help="Upper RSI(14) threshold. Lower values bias toward pullbacks.",
     )
     parser.add_argument(
         "--max-stoch-rsi-k",
         type=float,
-        default=80.0,
+        default=95.0,
         help="Upper bound for StochRSI %%K.",
     )
     parser.add_argument(
         "--min-adx",
         type=float,
-        default=18.0,
+        default=10.0,
         help="Minimum ADX(14) for trend strength.",
     )
     parser.add_argument(
@@ -869,8 +873,11 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     rsi14 = rsi(closes, 14)
     stoch_rsi_k, stoch_rsi_d = stoch_rsi(closes, 14, 14, 3, 3)
     macd_line, macd_signal = macd(closes, 12, 26, 9)
+    sma2_series = sma_series(closes, 2)
+    sma3_series = sma_series(closes, 3)
     stoch_k_series, stoch_d_series = stoch_rsi_series(closes, 14, 14, 3, 3)
     macd_series_vals, macd_signal_series = macd_series(closes, 12, 26, 9)
+    price_up, price_down = find_crossings(sma2_series, sma3_series)
     adx14, plus_di14, minus_di14 = adx(highs, lows, closes, 14)
     avg_volume20 = avg(volumes[-20:])
     dollar_volume20 = avg([(closes[i] * volumes[i]) for i in range(len(closes) - 20, len(closes))])
@@ -893,12 +900,24 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
     macd_up, macd_down = find_crossings(macd_series_vals, macd_signal_series)
     stoch_up, stoch_down = find_crossings(stoch_k_series, stoch_d_series)
     last_idx = len(closes) - 1
+    price_cross_age = (last_idx - price_up[-1]) if price_up else 999
+    price_bear_cross_age = (last_idx - price_down[-1]) if price_down else 999
     macd_cross_age = (last_idx - macd_up[-1]) if macd_up else 999
     stoch_cross_age = (last_idx - stoch_up[-1]) if stoch_up else 999
     dual_cross_gap = abs(macd_up[-1] - stoch_up[-1]) if (macd_up and stoch_up) else 999
     macd_bear_cross_age = (last_idx - macd_down[-1]) if macd_down else 999
     stoch_bear_cross_age = (last_idx - stoch_down[-1]) if stoch_down else 999
     dual_bear_cross_gap = abs(macd_down[-1] - stoch_down[-1]) if (macd_down and stoch_down) else 999
+    triple_cross_gap = (
+        max(price_up[-1], macd_up[-1], stoch_up[-1]) - min(price_up[-1], macd_up[-1], stoch_up[-1])
+        if (price_up and macd_up and stoch_up)
+        else 999
+    )
+    triple_bear_cross_gap = (
+        max(price_down[-1], macd_down[-1], stoch_down[-1]) - min(price_down[-1], macd_down[-1], stoch_down[-1])
+        if (price_down and macd_down and stoch_down)
+        else 999
+    )
 
     bb_mid_series = sma_series(closes, POWS_BB_LENGTH)
     bb_std_series = rolling_stdev(closes, POWS_BB_LENGTH)
@@ -969,12 +988,16 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         avg_volume20=avg_volume20,
         dollar_volume20=dollar_volume20,
         breakout_20d=breakout_20d,
+        price_cross_age=price_cross_age,
+        price_bear_cross_age=price_bear_cross_age,
         macd_cross_age=macd_cross_age,
         stoch_cross_age=stoch_cross_age,
         dual_cross_gap=dual_cross_gap,
         macd_bear_cross_age=macd_bear_cross_age,
         stoch_bear_cross_age=stoch_bear_cross_age,
         dual_bear_cross_gap=dual_bear_cross_gap,
+        triple_cross_gap=triple_cross_gap,
+        triple_bear_cross_gap=triple_bear_cross_gap,
         touched_outer_band_recent=touched_outer_band_recent,
         outer_touch_age=outer_touch_age,
         band_width_expansion=band_width_expansion,
@@ -1002,9 +1025,9 @@ def _direction_match(result: ScanResult, args: argparse.Namespace) -> tuple[bool
 
 
 def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, require_primary_uptrend: bool) -> bool:
-    require_uptrend = args.require_uptrend or args.pows
-    require_macd_bull = args.require_macd_bull or args.pows
-    require_di_bull = args.require_di_bull or args.pows
+    require_uptrend = args.require_uptrend
+    require_macd_bull = args.require_macd_bull
+    require_di_bull = args.require_di_bull
     require_macd_stoch_cross = args.require_macd_stoch_cross or args.pows
     require_band_liftoff = args.require_band_liftoff or args.pows
     require_simultaneous_cross = args.require_simultaneous_cross
@@ -1021,8 +1044,12 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
             bull_ok = bull_ok and (result.close > result.sma50 > result.sma89 > result.sma200)
             bear_ok = bear_ok and (result.close < result.sma50 < result.sma89 < result.sma200)
     if args.pows:
-        bull_ok = bull_ok and (result.close > result.sma50 > result.sma89 > result.sma200)
-        bear_ok = bear_ok and (result.close < result.sma50 < result.sma89 < result.sma200)
+        # POWS context: trend bias without requiring perfect full-stack moving-average order.
+        bull_ok = bull_ok and (result.close > result.sma50 and result.sma50 >= result.sma89)
+        bear_ok = bear_ok and (result.close < result.sma50 and result.sma50 <= result.sma89)
+        # Course 3x language: align price (2/3 MA), Stoch, and MACD in recent bars.
+        bull_ok = bull_ok and (result.price_cross_age <= args.cross_lookback and result.triple_cross_gap <= 2)
+        bear_ok = bear_ok and (result.price_bear_cross_age <= args.cross_lookback and result.triple_bear_cross_gap <= 2)
 
     if require_macd_bull:
         bull_ok = bull_ok and (result.macd > result.macd_signal)
