@@ -348,7 +348,7 @@
       const tfSel = card.querySelector(`#${id}-tf`);
       tfSel.addEventListener('change', () => {
         model.tf = tfSel.value;
-        drawChart(model);
+        ensureTimeframe(model, model.tf).then(() => drawChart(model));
       });
       if (chartObserver) {
         chartObserver.observe(card);
@@ -471,8 +471,8 @@
       }, {responsive: true});
     }
 
-    async function loadChartPayload(symbol) {
-      const resp = await fetch(`/chart_payload?symbol=${encodeURIComponent(symbol)}`);
+    async function loadChartPayload(symbol, tf = '1D') {
+      const resp = await fetch(`/chart_payload?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}`);
       if (!resp.ok) throw new Error(`request failed (${resp.status})`);
       const payload = await resp.json();
       if (payload.error) throw new Error(payload.error);
@@ -487,6 +487,27 @@
       processChartQueue();
     }
 
+    async function ensureTimeframe(model, tf) {
+      const targetTf = String(tf || '1D');
+      if (!model || !model.chart) return;
+      if (model.chart.timeframes && model.chart.timeframes[targetTf]) return;
+      if (model.loading) return;
+      model.loading = true;
+      status.textContent = `Loading ${targetTf} chart: ${model.symbol}...`;
+      try {
+        const payload = await loadChartPayload(model.symbol, targetTf);
+        if (!model.chart.timeframes) model.chart.timeframes = {};
+        const incoming = payload?.timeframes || {};
+        for (const [k, v] of Object.entries(incoming)) {
+          model.chart.timeframes[k] = v;
+        }
+      } catch (err) {
+        status.textContent = `Chart load failed for ${model.symbol}: ${err}`;
+      } finally {
+        model.loading = false;
+      }
+    }
+
     async function processChartQueue() {
       if (chartWorkerActive) return;
       chartWorkerActive = true;
@@ -496,7 +517,7 @@
           if (!model || model.chart) continue;
           status.textContent = `Loading chart: ${model.symbol}...`;
           try {
-            model.chart = await loadChartPayload(model.symbol);
+            model.chart = await loadChartPayload(model.symbol, model.tf || '1D');
             drawChart(model);
           } catch (err) {
             status.textContent = `Chart load failed for ${model.symbol}: ${err}`;
@@ -529,7 +550,7 @@
             tfSel.value = existing.tf;
             tfSel.addEventListener('change', () => {
               existing.tf = tfSel.value;
-              drawChart(existing);
+              ensureTimeframe(existing, existing.tf).then(() => drawChart(existing));
             });
           }
           if (existing.chart) drawChart(existing);

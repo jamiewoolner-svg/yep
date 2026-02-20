@@ -1015,8 +1015,13 @@ def _analyze_for_args(symbol: str, args: SimpleNamespace) -> Any | None:
     return None
 
 
-def build_chart_payload(symbol: str, days: int) -> dict[str, Any]:
-    cache_key = f"{symbol.upper()}:{int(days)}"
+def build_chart_payload(symbol: str, days: int, requested_timeframes: list[str] | None = None) -> dict[str, Any]:
+    if requested_timeframes:
+        normalized = sorted({str(tf).strip() for tf in requested_timeframes if str(tf).strip()})
+    else:
+        normalized = []
+    tf_key = ",".join(normalized) if normalized else "all"
+    cache_key = f"{symbol.upper()}:{int(days)}:{tf_key}"
     cached = _chart_cache_get(cache_key)
     if cached is not None:
         return cached
@@ -1028,14 +1033,32 @@ def build_chart_payload(symbol: str, days: int) -> dict[str, Any]:
         raise RuntimeError(f"Not enough data to chart {symbol}")
 
     timeframes: dict[str, dict[str, Any]] = {}
-    daily_chart = _chart_from_candles(symbol, "1D", daily_candles)
-    if daily_chart:
-        timeframes["1D"] = daily_chart
+    include_daily = (not normalized) or ("1D" in normalized)
+    if include_daily:
+        daily_chart = _chart_from_candles(symbol, "1D", daily_candles)
+        if daily_chart:
+            timeframes["1D"] = daily_chart
 
     intraday_keep = {233: 120, 55: 90, 34: 80, 21: 70, 13: 60, 8: 50, 5: 40}
+    intraday_targets: list[int]
+    if normalized:
+        intraday_targets = []
+        for tf in normalized:
+            if tf.endswith("m"):
+                try:
+                    minutes = int(tf[:-1])
+                except ValueError:
+                    continue
+                if minutes in intraday_keep:
+                    intraday_targets.append(minutes)
+    else:
+        intraday_targets = [233, 55, 34, 21, 13, 8, 5]
     try:
-        intraday = fetch_intraday(symbol, interval_min=1)
-        for minutes in (233, 55, 34, 21, 13, 8, 5):
+        if intraday_targets:
+            intraday = fetch_intraday(symbol, interval_min=1)
+        else:
+            intraday = []
+        for minutes in intraday_targets:
             bars = resample_to_minutes(intraday, target_minutes=minutes)
             keep = intraday_keep.get(minutes, 120)
             if len(bars) > keep:
@@ -1283,8 +1306,10 @@ def chart_payload() -> Response:
     symbol = str(request.args.get("symbol", "")).strip().upper()
     if not symbol:
         return Response(json.dumps({"error": "missing symbol"}), status=400, mimetype="application/json")
+    tf = str(request.args.get("tf", "")).strip()
+    requested = [tf] if tf else None
     try:
-        payload = build_chart_payload(symbol, 260)
+        payload = build_chart_payload(symbol, 260, requested_timeframes=requested)
         return Response(json.dumps(payload), mimetype="application/json")
     except Exception as exc:
         return Response(json.dumps({"error": str(exc)}), status=500, mimetype="application/json")
