@@ -122,6 +122,7 @@ class ScanResult:
     touched_outer_band_recent: bool
     outer_touch_age: int
     band_width_expansion: float
+    band_width_now: float
     band_widen_start_age: int
     band_widen_window_ok: bool
     liftoff_from_band: bool
@@ -263,6 +264,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.05,
         help="Minimum fractional BB width expansion vs recent baseline.",
+    )
+    parser.add_argument(
+        "--min-band-width-now",
+        type=float,
+        default=0.08,
+        help="Minimum current normalized BB width (upper-lower)/middle.",
+    )
+    parser.add_argument(
+        "--min-target-band-pct",
+        type=float,
+        default=0.01,
+        help="Minimum remaining move to target band (fractional) to avoid late entries.",
     )
     parser.add_argument(
         "--min-course-pattern-score",
@@ -1647,6 +1660,7 @@ def analyze_candles(symbol: str, candles: Sequence[Candle], timeframe: str = "1D
         touched_outer_band_recent=touched_outer_band_recent,
         outer_touch_age=outer_touch_age,
         band_width_expansion=band_width_expansion,
+        band_width_now=(0.0 if math.isnan(bw_now) else float(bw_now)),
         band_widen_start_age=band_widen_start_age,
         band_widen_window_ok=band_widen_window_ok,
         liftoff_from_band=liftoff_from_band,
@@ -1823,6 +1837,13 @@ def _passes_directional_setup(
             min_setup_score = 35.0
         bull_ok = bull_ok and (result.target_mid_pct >= min_target_mid and result.options_setup_score >= min_setup_score)
         bear_ok = bear_ok and (result.target_mid_pct >= min_target_mid and result.options_setup_score >= min_setup_score)
+        # Reject late-stage entries and narrow-band states.
+        min_target_band_pct = max(0.0, float(getattr(args, "min_target_band_pct", 0.01)))
+        min_band_width_now = max(0.0, float(getattr(args, "min_band_width_now", 0.08)))
+        bull_ok = bull_ok and (result.target_band_pct >= min_target_band_pct)
+        bear_ok = bear_ok and (result.target_band_pct >= min_target_band_pct)
+        bull_ok = bull_ok and (result.band_width_now >= min_band_width_now)
+        bear_ok = bear_ok and (result.band_width_now >= min_band_width_now)
         # Enforce user rule: widening should start about 5-14 bars before "ready" setups.
         if result.timeframe == "1D":
             bull_ok = bull_ok and bool(getattr(result, "band_widen_window_ok", False))
