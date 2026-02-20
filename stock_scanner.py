@@ -10,9 +10,11 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import csv
+import html
 import json
 import math
 import os
+import re
 import statistics
 import sys
 import threading
@@ -28,6 +30,7 @@ from typing import Iterable, List, Sequence, Tuple
 STOOQ_URL = "https://stooq.com/q/d/l/"
 POLYGON_AGGS_URL = "https://api.polygon.io/v2/aggs/ticker"
 SP500_CONSTITUENTS_URL = "https://datahub.io/core/s-and-p-500-companies/r/constituents.csv"
+NASDAQ100_COMPANIES_URL = "https://www.nasdaq.com/solutions/global-indexes/nasdaq-100/companies"
 POWS_BB_LENGTH = 21
 POWS_BB_STDDEV = 2.0
 POWS_SMA_FAST = 50
@@ -107,6 +110,11 @@ def parse_args() -> argparse.Namespace:
         "--sp500",
         action="store_true",
         help="Scan the full S&P 500 ticker universe.",
+    )
+    parser.add_argument(
+        "--qqq",
+        action="store_true",
+        help="Scan the Nasdaq-100 (QQQ) ticker universe.",
     )
     parser.add_argument(
         "--data-source",
@@ -276,6 +284,16 @@ def configure_data_source(data_source: str = "auto", polygon_api_key: str = "") 
     POLYGON_API_KEY = polygon_api_key or os.getenv("POLYGON_API_KEY", "")
 
 
+def _dedupe_symbols(symbols: Sequence[str]) -> List[str]:
+    deduped: List[str] = []
+    seen = set()
+    for symbol in symbols:
+        if symbol not in seen:
+            deduped.append(symbol)
+            seen.add(symbol)
+    return deduped
+
+
 def _polygon_key() -> str:
     key = POLYGON_API_KEY or os.getenv("POLYGON_API_KEY", "")
     if not key:
@@ -396,14 +414,55 @@ def fetch_sp500_symbols() -> List[str]:
     if not symbols:
         raise RuntimeError("S&P 500 constituents source returned no symbols")
 
-    # Keep stable order and drop duplicates.
-    deduped: List[str] = []
-    seen = set()
-    for symbol in symbols:
-        if symbol not in seen:
-            deduped.append(symbol)
-            seen.add(symbol)
-    return deduped
+    return _dedupe_symbols(symbols)
+
+
+def fetch_nasdaq100_symbols() -> List[str]:
+    req = urllib.request.Request(
+        NASDAQ100_COMPANIES_URL,
+        headers={"User-Agent": "Mozilla/5.0 (StockScannerCLI/1.0)"},
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"failed to fetch Nasdaq-100 constituents: {exc}") from exc
+
+    # Parse visible text from page HTML and extract lines that look like ticker rows.
+    text = re.sub(r"<[^>]+>", "\n", raw)
+    text = html.unescape(text)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+    symbols: List[str] = []
+    in_table = False
+    misses_after_table = 0
+    row_pattern = re.compile(r"^([A-Z]{1,5})(?:\s+.+)?$")
+
+    for line in lines:
+        if not in_table and ("Symbol" in line and "Company Name" in line):
+            in_table = True
+            misses_after_table = 0
+            continue
+        if not in_table:
+            continue
+
+        m = row_pattern.match(line)
+        if m:
+            symbol = m.group(1).strip().upper()
+            if symbol and symbol not in {"ETF", "INDEX"}:
+                symbols.append(symbol)
+                misses_after_table = 0
+            continue
+
+        misses_after_table += 1
+        if len(symbols) >= 80 and misses_after_table > 100:
+            break
+
+    symbols = _dedupe_symbols(symbols)
+    if len(symbols) < 80:
+        raise RuntimeError("Nasdaq-100 source parsing returned too few symbols")
+    return symbols
 
 
 def fetch_stooq_history(symbol: str) -> List[Candle]:
@@ -1219,9 +1278,21 @@ def main() -> int:
     if args.plot_symbol:
         return plot_symbol_with_crossings(args.plot_symbol, args.plot_days, args.plot_output)
 
-    if args.sp500:
+    if args.sp500 and args.qqq:
+        try:
+            symbols = _dedupe_symbols(fetch_sp500_symbols() + fetch_nasdaq100_symbols())
+        except RuntimeError as exc:
+            print(f"error loading symbols: {exc}", file=sys.stderr)
+            return 1
+    elif args.sp500:
         try:
             symbols = fetch_sp500_symbols()
+        except RuntimeError as exc:
+            print(f"error loading symbols: {exc}", file=sys.stderr)
+            return 1
+    elif args.qqq:
+        try:
+            symbols = fetch_nasdaq100_symbols()
         except RuntimeError as exc:
             print(f"error loading symbols: {exc}", file=sys.stderr)
             return 1

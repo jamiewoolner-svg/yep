@@ -194,6 +194,7 @@
           <div><label>Max Retries</label><input type="number" name="max_retries" value="{{ form_values.max_retries }}" min="0" max="10"></div>
           <div class="full checks">
             <label><input type="checkbox" name="use_sp500" {% if form_values.use_sp500 %}checked{% endif %}> Use S&P 500 universe</label>
+            <label><input type="checkbox" name="use_qqq" {% if form_values.use_qqq %}checked{% endif %}> Use QQQ (Nasdaq-100)</label>
             <label><input type="checkbox" name="pows" {% if form_values.pows %}checked{% endif %}> POWS preset</label>
             <label><input type="checkbox" name="require_uptrend" {% if form_values.require_uptrend %}checked{% endif %}> Require uptrend</label>
             <label><input type="checkbox" name="require_breakout" {% if form_values.require_breakout %}checked{% endif %}> Require breakout</label>

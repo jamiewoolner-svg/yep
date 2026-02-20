@@ -16,6 +16,7 @@ from stock_scanner import (
     analyze_candles,
     analyze_symbol,
     configure_data_source,
+    fetch_nasdaq100_symbols,
     fetch_sp500_symbols,
     fetch_history,
     fetch_intraday,
@@ -233,6 +234,7 @@ def index() -> str:
     form_values = {
         "symbols": "AAPL,MSFT,NVDA,TSLA,AMZN,META",
         "use_sp500": False,
+        "use_qqq": False,
         "pows": True,
         "top": 20,
         "plot_days": 260,
@@ -277,7 +279,16 @@ def scan_stream() -> Response:
     plot_days = max(60, _as_int(form, "plot_days", 260))
 
     try:
-        symbols = fetch_sp500_symbols() if (form.get("use_sp500") == "on") else load_symbols(form.get("symbols", ""), "data/default_symbols.txt")
+        use_sp500 = form.get("use_sp500") == "on"
+        use_qqq = form.get("use_qqq") == "on"
+        if use_sp500 and use_qqq:
+            symbols = list(dict.fromkeys(fetch_sp500_symbols() + fetch_nasdaq100_symbols()))
+        elif use_sp500:
+            symbols = fetch_sp500_symbols()
+        elif use_qqq:
+            symbols = fetch_nasdaq100_symbols()
+        else:
+            symbols = load_symbols(form.get("symbols", ""), "data/default_symbols.txt")
     except Exception as exc:
         payload = json.dumps({"type": "error", "message": str(exc)})
         return Response(payload + "\n", mimetype="application/x-ndjson")
@@ -373,19 +384,28 @@ def simple() -> str:
     rows: list[dict[str, Any]] = []
     symbols = "AAPL,MSFT,NVDA,TSLA,AMZN,META"
     use_sp500 = False
+    use_qqq = False
     workers = 4
     top = 20
 
     if request.method == "POST":
         symbols = str(request.form.get("symbols", symbols))
         use_sp500 = request.form.get("use_sp500") == "on"
+        use_qqq = request.form.get("use_qqq") == "on"
         workers = max(1, _as_int(request.form, "workers", workers))
         top = max(1, _as_int(request.form, "top", top))
         args = _build_args(request.form)
         configure_data_source(args.data_source, args.polygon_api_key)
 
         try:
-            universe = fetch_sp500_symbols() if use_sp500 else load_symbols(symbols, "data/default_symbols.txt")
+            if use_sp500 and use_qqq:
+                universe = list(dict.fromkeys(fetch_sp500_symbols() + fetch_nasdaq100_symbols()))
+            elif use_sp500:
+                universe = fetch_sp500_symbols()
+            elif use_qqq:
+                universe = fetch_nasdaq100_symbols()
+            else:
+                universe = load_symbols(symbols, "data/default_symbols.txt")
             scanned, failures = scan_symbols(universe, args, workers=workers)
             scanned.sort(key=lambda r: r.score, reverse=True)
             rows = scanned[:top]
@@ -406,6 +426,7 @@ th,td{border:1px solid #ddd;padding:6px;font-size:13px;text-align:right} th:firs
 <form method="post">
 <div><label>Symbols:</label><input name="symbols" value="{{ symbols }}" size="60"></div>
 <div><label><input type="checkbox" name="use_sp500" {% if use_sp500 %}checked{% endif %}> Use S&P500</label></div>
+<div><label><input type="checkbox" name="use_qqq" {% if use_qqq %}checked{% endif %}> Use QQQ (Nasdaq-100)</label></div>
 <div><label>Workers:</label><input name="workers" value="{{ workers }}" size="4">
 <label>Top:</label><input name="top" value="{{ top }}" size="4"></div>
 <div><label>Data Source:</label>
@@ -428,6 +449,7 @@ th,td{border:1px solid #ddd;padding:6px;font-size:13px;text-align:right} th:firs
         rows=rows,
         symbols=symbols,
         use_sp500=use_sp500,
+        use_qqq=use_qqq,
         workers=workers,
         top=top,
     )
