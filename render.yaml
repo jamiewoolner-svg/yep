@@ -1,24 +1,17 @@
-# Exported from Render on 2026-02-20T05:47:01Z
-version: "1"
-projects:
-- name: My project
-  environments:
-  - name: Production
-    services:
-    - type: web
-      name: yep
-      runtime: python
-      repo: https://github.com/jamiewoolner-svg/yep
-      plan: starter
-      envVars:
+services:
+  - type: web
+    name: yep
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install -r requirements-web.txt
+    startCommand: python3 -m gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 300
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
       - key: POLYGON_MIN_GAP_SEC
         sync: false
       - key: SCANNER_DATA_SOURCE
         sync: false
       - key: POLYGON_API_KEY
         sync: false
-      region: oregon
-      buildCommand: pip install -r requirements-web.txt
-      startCommand: python3 -m gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 300
-      healthCheckPath: /healthz
-      autoDeployTrigger: commit
