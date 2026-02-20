@@ -189,19 +189,6 @@
 
     <div class="card">
       <h2>Charts</h2>
-      <div class="chart-controls">
-        <span>Candle Timeframe</span>
-        <select id="chart-timeframe">
-          <option value="1D" selected>1D</option>
-          <option value="233m">233m</option>
-          <option value="55m">55m</option>
-          <option value="34m">34m</option>
-          <option value="21m">21m</option>
-          <option value="13m">13m</option>
-          <option value="8m">8m</option>
-          <option value="5m">5m</option>
-        </select>
-      </div>
       <div id="charts"></div>
     </div>
   </div>
@@ -216,7 +203,6 @@
     const tierEl = document.getElementById('m-tier');
     const scannedEl = document.getElementById('m-scanned');
     const matchesEl = document.getElementById('m-matches');
-    const chartTimeframeEl = document.getElementById('chart-timeframe');
     let activeController = null;
     const chartModels = [];
 
@@ -266,23 +252,25 @@
 
     function renderCharts() {
       charts.innerHTML = '';
-      const tf = chartTimeframeEl.value;
       for (const model of chartModels) {
-        addChart(model.chart, model.tier, tf);
+        addChart(model);
       }
     }
 
-    function addChart(chartBundle, tier, tf) {
+    function _tfOptions(selected) {
+      const vals = ['1D', '233m', '55m', '34m', '21m', '13m', '8m', '5m'];
+      return vals.map(v => `<option value="${v}" ${v === selected ? 'selected' : ''}>${v}</option>`).join('');
+    }
+
+    function drawChart(model, plotId) {
       if (typeof Plotly === 'undefined') {
         status.textContent = 'Charts unavailable: Plotly CDN did not load.';
         return;
       }
+      const tf = model.tf || '1D';
+      const chartBundle = model.chart;
       const view = chartBundle.timeframes[tf] || chartBundle.timeframes['1D'] || Object.values(chartBundle.timeframes)[0];
       if (!view) return;
-      const id = `chart-${chartBundle.symbol}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-      const block = document.createElement('div');
-      block.innerHTML = `<h3>${chartBundle.symbol} (${tier}) · TF: ${view.timeframe}</h3><div id="${id}" class="chart-box"></div>`;
-      charts.appendChild(block);
 
       const x = view.dates;
       const eventLineColor = {high: '#f26d6d', medium: '#f2bf5a', low: '#6da7f2'};
@@ -343,7 +331,7 @@
         {x: pick(view.stoch_cross_down_idx, x), y: pick(view.stoch_cross_down_idx, view.stoch_k), mode: 'markers', marker: {color: 'red', symbol: 'triangle-down', size: 7}, name: 'Stoch Down', xaxis: 'x3', yaxis: 'y3'}
       ];
 
-      Plotly.newPlot(id, traces, {
+      Plotly.newPlot(plotId, traces, {
         margin: {l: 50, r: 20, t: 20, b: 30},
         paper_bgcolor: '#132230',
         plot_bgcolor: '#132230',
@@ -361,13 +349,38 @@
       }, {responsive: true});
     }
 
+    function addChart(model) {
+      const chartBundle = model.chart;
+      const tier = model.tier;
+      const id = `chart-${chartBundle.symbol}-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      const selId = `${id}-tf`;
+      const block = document.createElement('div');
+      block.innerHTML = `
+        <h3>${chartBundle.symbol} (${tier})</h3>
+        <div class="chart-controls">
+          <span>Candle Timeframe</span>
+          <select id="${selId}">${_tfOptions(model.tf || '1D')}</select>
+        </div>
+        <div id="${id}" class="chart-box"></div>
+      `;
+      charts.appendChild(block);
+      const sel = document.getElementById(selId);
+      if (sel) {
+        sel.addEventListener('change', () => {
+          model.tf = sel.value;
+          drawChart(model, id);
+        });
+      }
+      drawChart(model, id);
+    }
+
     async function handleMessage(msg) {
       if (msg.type === 'status' || msg.type === 'progress') {
         status.textContent = msg.message;
       } else if (msg.type === 'match') {
         emptyNote.style.display = 'none';
         addRow(msg.row);
-        chartModels.push({chart: msg.chart, tier: msg.tier});
+        chartModels.push({chart: msg.chart, tier: msg.tier, tf: '1D'});
         renderCharts();
         status.textContent = `Match: ${msg.row.symbol} (${msg.tier})`;
       } else if (msg.type === 'error') {
@@ -442,12 +455,6 @@
       } finally {
         scanBtn.disabled = false;
         activeController = null;
-      }
-    });
-
-    chartTimeframeEl.addEventListener('change', () => {
-      if (chartModels.length) {
-        renderCharts();
       }
     });
 
