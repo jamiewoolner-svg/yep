@@ -1542,7 +1542,9 @@ def _direction_match(result: ScanResult, args: argparse.Namespace) -> tuple[bool
     return bull, bear
 
 
-def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, require_primary_uptrend: bool) -> bool:
+def _passes_directional_setup(
+    result: ScanResult, args: argparse.Namespace, require_primary_uptrend: bool, secondary_confirmation: bool = False
+) -> bool:
     require_uptrend = args.require_uptrend
     require_macd_bull = args.require_macd_bull
     require_di_bull = args.require_di_bull
@@ -1626,19 +1628,20 @@ def _passes_directional_setup(result: ScanResult, args: argparse.Namespace, requ
         bull_ok = bull_ok and (bull_bb_spread_ok or result.pre3x_bull_score >= 7.0)
         bear_ok = bear_ok and (bear_bb_spread_ok or result.pre3x_bear_score >= 7.0)
 
-    # Options swing viability floor: progressively relax in watchlist mode.
-    if bb_spread_watchlist and not require_band_liftoff:
-        if require_macd_stoch_cross:
-            min_target_mid = 0.002
-            min_setup_score = 22.0
+    # Only apply full options viability gates on primary (daily) timeframe.
+    if not secondary_confirmation:
+        if bb_spread_watchlist and not require_band_liftoff:
+            if require_macd_stoch_cross:
+                min_target_mid = 0.002
+                min_setup_score = 22.0
+            else:
+                min_target_mid = 0.0
+                min_setup_score = 12.0
         else:
-            min_target_mid = 0.0
-            min_setup_score = 12.0
-    else:
-        min_target_mid = 0.01
-        min_setup_score = 35.0
-    bull_ok = bull_ok and (result.target_mid_pct >= min_target_mid and result.options_setup_score >= min_setup_score)
-    bear_ok = bear_ok and (result.target_mid_pct >= min_target_mid and result.options_setup_score >= min_setup_score)
+            min_target_mid = 0.01
+            min_setup_score = 35.0
+        bull_ok = bull_ok and (result.target_mid_pct >= min_target_mid and result.options_setup_score >= min_setup_score)
+        bear_ok = bear_ok and (result.target_mid_pct >= min_target_mid and result.options_setup_score >= min_setup_score)
 
     # Avoid extremely stretched end-of-move candles in either direction.
     bull_ok = bull_ok and not (result.close > result.bb_upper * 1.03)
@@ -1663,11 +1666,11 @@ def passes_filters(result: ScanResult, args: argparse.Namespace) -> bool:
         return False
     if require_breakout and not result.breakout_20d:
         return False
-    return _passes_directional_setup(result, args, require_primary_uptrend=True)
+    return _passes_directional_setup(result, args, require_primary_uptrend=True, secondary_confirmation=False)
 
 
 def passes_secondary_timeframe_filters(result: ScanResult, args: argparse.Namespace) -> bool:
-    return _passes_directional_setup(result, args, require_primary_uptrend=False)
+    return _passes_directional_setup(result, args, require_primary_uptrend=False, secondary_confirmation=True)
 
 
 def format_money(value: float) -> str:
