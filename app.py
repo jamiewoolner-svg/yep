@@ -1176,6 +1176,7 @@ def scan_stream() -> Response:
     max_retries = min(1, max(0, int(base_args.max_retries)))
     output_limit = max(1, int(os.getenv("OUTPUT_LIMIT", "30")))
     prefilter_limit = max(output_limit * 3, int(os.getenv("PREFILTER_LIMIT", "180")))
+    confirmation_limit = max(output_limit, int(os.getenv("CONFIRMATION_LIMIT", str(max(output_limit * 2, 60)))))
     max_tune_steps = max(1, int(os.getenv("MAX_TUNE_STEPS", "6")))
     max_scan_seconds = max(60, int(os.getenv("MAX_SCAN_SECONDS", "420")))
 
@@ -1388,12 +1389,22 @@ def scan_stream() -> Response:
             }
         ) + "\n"
 
-        # Pass 1: strict hourly confirmation on shortlist only.
-        yield from _run_pass("pass 1/2", _tuned_args(0), scan_pool, candidate_rows)
+        hourly_pool = scan_pool[: min(len(scan_pool), confirmation_limit)]
+        if len(scan_pool) > len(hourly_pool):
+            yield json.dumps(
+                {
+                    "type": "status",
+                    "message": f"Hourly confirmation capped to top {len(hourly_pool)} symbols for speed.",
+                    "tier": "live",
+                }
+            ) + "\n"
+
+        # Pass 1: strict hourly confirmation on top-ranked shortlist only.
+        yield from _run_pass("pass 1/2", _tuned_args(0), hourly_pool, candidate_rows)
 
         # Pass 2 (optional): relaxed pass only for symbols not matched in pass 1.
         if len(candidate_rows) < output_limit and max_tune_steps > 1 and (time.time() - scan_start_ts) <= max_scan_seconds:
-            remaining_symbols = [s for s in scan_pool if s not in candidate_rows]
+            remaining_symbols = [s for s in hourly_pool if s not in candidate_rows]
             relaxed_step = min(2, max_tune_steps - 1)
             yield from _run_pass("pass 2/2", _tuned_args(relaxed_step), remaining_symbols, candidate_rows)
 
@@ -1422,6 +1433,40 @@ def scan_stream() -> Response:
                 candidate_rows[sym] = row
                 if len(candidate_rows) >= output_limit:
                     break
+
+        if not candidate_rows:
+            emergency_pool = [s for s in scan_pool if str(s).strip()] or [s for s in symbols if str(s).strip()]
+            emergency_count = min(output_limit, len(emergency_pool))
+            for sym in emergency_pool[:emergency_count]:
+                key = str(sym).upper()
+                candidate_rows[key] = {
+                    "symbol": key,
+                    "dir": "BULL",
+                    "setup": "Fallback",
+                    "phase": 1,
+                    "stage": "watch",
+                    "setup_score": 0.0,
+                    "lifecycle_score": 0.0,
+                    "bb_expansion": 0.0,
+                    "bb_width_now": 0.0,
+                    "bb_width_pct": 0.0,
+                    "bb_slope3": 0.0,
+                    "bb_osc": 0.0,
+                    "bb_regime": False,
+                    "bb_vs_prev_month": 0.0,
+                    "bb_double_age": 999,
+                    "band_ride_score": 0.0,
+                    "bb_widen_window_ok": False,
+                    "bb_widen_start_age": 999,
+                    "rank_score": 0.0,
+                }
+            yield json.dumps(
+                {
+                    "type": "status",
+                    "message": "Live data returned no ranked setups; showing fallback symbols so results are not empty.",
+                    "tier": "live",
+                }
+            ) + "\n"
 
         ordered_rows = sorted(candidate_rows.values(), key=lambda r: float(r.get("rank_score", 0.0)), reverse=True)[:output_limit]
         for row in ordered_rows:
