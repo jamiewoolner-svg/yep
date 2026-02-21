@@ -1175,6 +1175,7 @@ def scan_stream() -> Response:
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = min(1, max(0, int(base_args.max_retries)))
     output_limit = max(1, int(os.getenv("OUTPUT_LIMIT", "30")))
+    prefilter_limit = max(output_limit * 3, int(os.getenv("PREFILTER_LIMIT", "180")))
     max_tune_steps = max(1, int(os.getenv("MAX_TUNE_STEPS", "6")))
     max_scan_seconds = max(60, int(os.getenv("MAX_SCAN_SECONDS", "420")))
 
@@ -1238,6 +1239,8 @@ def scan_stream() -> Response:
         found = 0
         total_symbols = len(symbols)
         candidate_rows: dict[str, dict[str, Any]] = {}
+        prefilter_rows: dict[str, dict[str, Any]] = {}
+        scan_pool: list[str] = list(symbols)
         yield json.dumps({"type": "status", "message": f"Universe size: {total_symbols} symbols"}) + "\n"
         strict_args = _tuned_args(0)
         src = str(getattr(strict_args, "data_source", "auto")).lower()
@@ -1271,7 +1274,13 @@ def scan_stream() -> Response:
 
         scanned_symbols: set[str] = set()
         hard_failures: list[tuple[str, str]] = []
-        def _run_pass(pass_label: str, pass_args: SimpleNamespace, pass_symbols: list[str]) -> None:
+        def _run_pass(
+            pass_label: str,
+            pass_args: SimpleNamespace,
+            pass_symbols: list[str],
+            out_rows: dict[str, dict[str, Any]],
+            count_toward_found: bool = True,
+        ) -> None:
             nonlocal found
             if not pass_symbols:
                 return
@@ -1321,12 +1330,13 @@ def scan_stream() -> Response:
                             setattr(analyzed, "pattern_mode", str(getattr(analyzed, "setup_direction", "n/a")).upper())
 
                         row = _result_row(analyzed)
-                        prev = candidate_rows.get(sym)
+                        prev = out_rows.get(sym)
                         if prev is None:
-                            found += 1
-                            candidate_rows[sym] = row
+                            if count_toward_found:
+                                found += 1
+                            out_rows[sym] = row
                         elif float(row.get("rank_score", 0.0)) > float(prev.get("rank_score", 0.0)):
-                            candidate_rows[sym] = row
+                            out_rows[sym] = row
 
                 if retry_symbols:
                     retry_attempt += 1
@@ -1338,14 +1348,54 @@ def scan_stream() -> Response:
                     ) + "\n"
                 pending_symbols = retry_symbols
 
-        # Pass 1 (fast): full-universe scan once.
-        yield from _run_pass("pass 1/2", _tuned_args(0), list(symbols))
+        # Full-universe prefilter: daily-only candidate ranking (fast path).
+        prefilter_args = copy.deepcopy(base_args)
+        prefilter_args.require_daily_and_233 = False
+        prefilter_args.require_hourly = False
+        prefilter_args.require_secondary_confirmation = False
+        prefilter_args.require_precision_entry = False
+        prefilter_args.scan_intraday_3x = False
+        prefilter_args.allow_momentum_watchlist = True
+        prefilter_args.force_candidate_mode = True
+        prefilter_args.require_macd_stoch_cross = False
+        prefilter_args.require_band_liftoff = False
+        prefilter_args.require_widening_oscillation = False
+        prefilter_args.require_band_widen_window = False
+        prefilter_args.require_band_ride = False
+        prefilter_args.min_course_pattern_score = 0.0
+        prefilter_args.min_adx = 0.0
+        prefilter_args.max_rsi = 99.0
+        prefilter_args.max_stoch_rsi_k = 99.0
+        prefilter_args.enforce_recent_lifecycle_gate = False
+        prefilter_args.enforce_three_x_gate = False
+
+        yield from _run_pass("prefilter", prefilter_args, list(symbols), prefilter_rows, count_toward_found=False)
+
+        ordered_prefilter = sorted(prefilter_rows.values(), key=lambda r: float(r.get("rank_score", 0.0)), reverse=True)
+        scan_pool = [
+            str(r.get("symbol", "")).upper()
+            for r in ordered_prefilter[: min(prefilter_limit, len(ordered_prefilter))]
+            if str(r.get("symbol", "")).strip()
+        ]
+        if not scan_pool:
+            scan_pool = list(symbols)[: min(prefilter_limit, len(symbols))]
+
+        yield json.dumps(
+            {
+                "type": "status",
+                "message": f"Prefilter kept {len(scan_pool)} symbols for hourly confirmation.",
+                "tier": "live",
+            }
+        ) + "\n"
+
+        # Pass 1: strict hourly confirmation on shortlist only.
+        yield from _run_pass("pass 1/2", _tuned_args(0), scan_pool, candidate_rows)
 
         # Pass 2 (optional): relaxed pass only for symbols not matched in pass 1.
         if len(candidate_rows) < output_limit and max_tune_steps > 1 and (time.time() - scan_start_ts) <= max_scan_seconds:
-            remaining_symbols = [s for s in symbols if s not in candidate_rows]
+            remaining_symbols = [s for s in scan_pool if s not in candidate_rows]
             relaxed_step = min(2, max_tune_steps - 1)
-            yield from _run_pass("pass 2/2", _tuned_args(relaxed_step), remaining_symbols)
+            yield from _run_pass("pass 2/2", _tuned_args(relaxed_step), remaining_symbols, candidate_rows)
 
         if (time.time() - scan_start_ts) > max_scan_seconds:
             yield json.dumps(
@@ -1363,6 +1413,15 @@ def scan_stream() -> Response:
             ) + "\n"
             yield json.dumps({"type": "done", "count": min(len(candidate_rows), output_limit), "tier": "live"}) + "\n"
             return
+
+        if len(candidate_rows) < output_limit and prefilter_rows:
+            for row in ordered_prefilter:
+                sym = str(row.get("symbol", "")).upper()
+                if not sym or sym in candidate_rows:
+                    continue
+                candidate_rows[sym] = row
+                if len(candidate_rows) >= output_limit:
+                    break
 
         ordered_rows = sorted(candidate_rows.values(), key=lambda r: float(r.get("rank_score", 0.0)), reverse=True)[:output_limit]
         for row in ordered_rows:
