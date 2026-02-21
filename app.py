@@ -1164,15 +1164,10 @@ def scan_stream() -> Response:
     plot_days = 260
 
     try:
-        symbols = list(dict.fromkeys(fetch_sp500_symbols() + fetch_nasdaq100_symbols()))
+        symbols = list(dict.fromkeys(fetch_sp500_symbols() + ["QQQ"]))
     except Exception as exc:
-        # Fallback to bundled symbols if remote universe sources are temporarily unavailable.
-        try:
-            symbols = load_symbols(None, "data/default_symbols.txt")
-            fallback_msg = f"Universe source unavailable ({exc}); using bundled default symbols ({len(symbols)})."
-        except Exception:
-            payload = json.dumps({"type": "error", "message": str(exc)})
-            return Response(payload + "\n", mimetype="application/x-ndjson")
+        payload = json.dumps({"type": "error", "message": f"Universe source unavailable (S&P 500 + QQQ): {exc}"})
+        return Response(payload + "\n", mimetype="application/x-ndjson")
     else:
         fallback_msg = ""
 
@@ -1180,7 +1175,6 @@ def scan_stream() -> Response:
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = min(1, max(0, int(base_args.max_retries)))
     output_limit = max(1, int(os.getenv("OUTPUT_LIMIT", "30")))
-    prefilter_limit = max(output_limit * 2, int(os.getenv("PREFILTER_LIMIT", "180")))
     max_tune_steps = max(1, int(os.getenv("MAX_TUNE_STEPS", "6")))
     max_scan_seconds = max(60, int(os.getenv("MAX_SCAN_SECONDS", "420")))
 
@@ -1277,20 +1271,13 @@ def scan_stream() -> Response:
 
         scanned_symbols: set[str] = set()
         hard_failures: list[tuple[str, str]] = []
-        prefilter_rows: dict[str, dict[str, Any]] = {}
-        def _run_pass(
-            pass_label: str,
-            pass_args: SimpleNamespace,
-            pass_symbols: list[str],
-            out_rows: dict[str, dict[str, Any]],
-            count_toward_found: bool,
-        ) -> None:
+        def _run_pass(pass_label: str, pass_args: SimpleNamespace, pass_symbols: list[str]) -> None:
             nonlocal found
             if not pass_symbols:
                 return
             yield_msg = {
                 "type": "status",
-                "message": f"{pass_label}: analyzing {len(pass_symbols)} symbols (candidates={len(out_rows)})",
+                "message": f"{pass_label}: analyzing {len(pass_symbols)} symbols (candidates={found})",
                 "tier": "live",
             }
             yield json.dumps(yield_msg) + "\n"
@@ -1334,13 +1321,12 @@ def scan_stream() -> Response:
                             setattr(analyzed, "pattern_mode", str(getattr(analyzed, "setup_direction", "n/a")).upper())
 
                         row = _result_row(analyzed)
-                        prev = out_rows.get(sym)
+                        prev = candidate_rows.get(sym)
                         if prev is None:
-                            if count_toward_found:
-                                found += 1
-                            out_rows[sym] = row
+                            found += 1
+                            candidate_rows[sym] = row
                         elif float(row.get("rank_score", 0.0)) > float(prev.get("rank_score", 0.0)):
-                            out_rows[sym] = row
+                            candidate_rows[sym] = row
 
                 if retry_symbols:
                     retry_attempt += 1
@@ -1352,74 +1338,14 @@ def scan_stream() -> Response:
                     ) + "\n"
                 pending_symbols = retry_symbols
 
-        scan_pool = list(symbols)
-
-        # Stage 0 (fast prefilter): scan whole universe with daily-only checks, keep strongest shortlist.
-        if len(scan_pool) > prefilter_limit:
-            prefilter_args = copy.deepcopy(base_args)
-            prefilter_args.require_daily_and_233 = False
-            prefilter_args.require_hourly = False
-            prefilter_args.require_secondary_confirmation = False
-            prefilter_args.require_precision_entry = False
-            prefilter_args.scan_intraday_3x = False
-            prefilter_args.allow_momentum_watchlist = True
-            prefilter_args.force_candidate_mode = True
-            prefilter_args.require_macd_stoch_cross = False
-            prefilter_args.require_band_liftoff = False
-            prefilter_args.require_widening_oscillation = False
-            prefilter_args.require_band_widen_window = False
-            prefilter_args.require_band_ride = False
-            prefilter_args.min_course_pattern_score = 0.0
-            prefilter_args.min_adx = 0.0
-            prefilter_args.max_rsi = 99.0
-            prefilter_args.max_stoch_rsi_k = 99.0
-            prefilter_args.enforce_recent_lifecycle_gate = False
-            prefilter_args.enforce_three_x_gate = False
-            yield from _run_pass("prefilter", prefilter_args, scan_pool, prefilter_rows, count_toward_found=False)
-            ordered_prefilter = sorted(prefilter_rows.values(), key=lambda r: float(r.get("rank_score", 0.0)), reverse=True)
-            scan_pool = [str(r.get("symbol", "")).upper() for r in ordered_prefilter[:prefilter_limit] if str(r.get("symbol", "")).strip()]
-            if not scan_pool:
-                scan_pool = list(symbols)[:prefilter_limit]
-            yield json.dumps(
-                {
-                    "type": "status",
-                    "message": f"Prefilter kept {len(scan_pool)} strongest symbols for hourly confirmation.",
-                    "tier": "live",
-                }
-            ) + "\n"
-
-        # Pass 1 (hourly strict): scan shortlisted universe once.
-        yield from _run_pass("pass 1/2", _tuned_args(0), scan_pool, candidate_rows, count_toward_found=True)
+        # Pass 1 (fast): full-universe scan once.
+        yield from _run_pass("pass 1/2", _tuned_args(0), list(symbols))
 
         # Pass 2 (optional): relaxed pass only for symbols not matched in pass 1.
         if len(candidate_rows) < output_limit and max_tune_steps > 1 and (time.time() - scan_start_ts) <= max_scan_seconds:
-            remaining_symbols = [s for s in scan_pool if s not in candidate_rows]
+            remaining_symbols = [s for s in symbols if s not in candidate_rows]
             relaxed_step = min(2, max_tune_steps - 1)
-            yield from _run_pass("pass 2/2", _tuned_args(relaxed_step), remaining_symbols, candidate_rows, count_toward_found=True)
-
-        # Recovery pass: relax confirmation/gating to avoid zero-result scans.
-        if len(candidate_rows) < output_limit and (time.time() - scan_start_ts) <= max_scan_seconds:
-            remaining_symbols = [s for s in scan_pool if s not in candidate_rows]
-            recovery_args = copy.deepcopy(base_args)
-            recovery_args.require_daily_and_233 = False
-            recovery_args.require_hourly = False
-            recovery_args.require_secondary_confirmation = False
-            recovery_args.require_precision_entry = False
-            recovery_args.scan_intraday_3x = False
-            recovery_args.allow_momentum_watchlist = True
-            recovery_args.force_candidate_mode = True
-            recovery_args.require_macd_stoch_cross = False
-            recovery_args.require_band_liftoff = False
-            recovery_args.require_widening_oscillation = False
-            recovery_args.require_band_widen_window = False
-            recovery_args.require_band_ride = False
-            recovery_args.min_course_pattern_score = 0.0
-            recovery_args.min_adx = 0.0
-            recovery_args.max_rsi = 99.0
-            recovery_args.max_stoch_rsi_k = 99.0
-            recovery_args.enforce_recent_lifecycle_gate = False
-            recovery_args.enforce_three_x_gate = False
-            yield from _run_pass("recovery", recovery_args, remaining_symbols, candidate_rows, count_toward_found=True)
+            yield from _run_pass("pass 2/2", _tuned_args(relaxed_step), remaining_symbols)
 
         if (time.time() - scan_start_ts) > max_scan_seconds:
             yield json.dumps(
@@ -1437,35 +1363,6 @@ def scan_stream() -> Response:
             ) + "\n"
             yield json.dumps({"type": "done", "count": min(len(candidate_rows), output_limit), "tier": "live"}) + "\n"
             return
-
-        if not candidate_rows and prefilter_rows:
-            ordered_prefilter = sorted(prefilter_rows.values(), key=lambda r: float(r.get("rank_score", 0.0)), reverse=True)
-            for row in ordered_prefilter[:output_limit]:
-                symbol = str(row.get("symbol", "")).upper()
-                if symbol:
-                    candidate_rows[symbol] = row
-
-        if not candidate_rows:
-            emergency_budget = min(len(symbols), max(output_limit * 3, 60))
-            for sym in symbols[:emergency_budget]:
-                try:
-                    snap = _load_symbol_snapshot(sym, base_args, include_intraday=False)
-                except Exception:
-                    continue
-                if not snap:
-                    continue
-                analyzed = snap.get("daily")
-                if not analyzed:
-                    continue
-                if reference_pattern:
-                    direct_similarity = _pattern_similarity(reference_pattern, analyzed)
-                    setattr(analyzed, "pattern_similarity_direct", direct_similarity)
-                    setattr(analyzed, "pattern_similarity", direct_similarity)
-                    setattr(analyzed, "pattern_mode", str(getattr(analyzed, "setup_direction", "n/a")).upper())
-                row = _result_row(analyzed)
-                candidate_rows[sym] = row
-                if len(candidate_rows) >= output_limit:
-                    break
 
         ordered_rows = sorted(candidate_rows.values(), key=lambda r: float(r.get("rank_score", 0.0)), reverse=True)[:output_limit]
         for row in ordered_rows:
