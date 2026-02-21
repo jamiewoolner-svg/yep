@@ -1175,10 +1175,10 @@ def scan_stream() -> Response:
     configure_data_source(base_args.data_source, base_args.polygon_api_key)
     max_retries = min(1, max(0, int(base_args.max_retries)))
     output_limit = max(1, int(os.getenv("OUTPUT_LIMIT", "30")))
-    prefilter_limit = max(output_limit * 3, int(os.getenv("PREFILTER_LIMIT", "180")))
-    confirmation_limit = max(output_limit, int(os.getenv("CONFIRMATION_LIMIT", str(max(output_limit * 2, 60)))))
+    prefilter_limit = max(output_limit * 2, int(os.getenv("PREFILTER_LIMIT", "120")))
+    confirmation_limit = max(output_limit, int(os.getenv("CONFIRMATION_LIMIT", str(max(output_limit + 20, 40)))))
     max_tune_steps = max(1, int(os.getenv("MAX_TUNE_STEPS", "6")))
-    max_scan_seconds = max(60, int(os.getenv("MAX_SCAN_SECONDS", "420")))
+    max_scan_seconds = max(60, int(os.getenv("MAX_SCAN_SECONDS", "180")))
 
     def _tuned_args(step: int) -> SimpleNamespace:
         a = copy.deepcopy(base_args)
@@ -1297,11 +1297,21 @@ def scan_stream() -> Response:
             while pending_symbols:
                 if (time.time() - scan_start_ts) > max_scan_seconds:
                     return
-                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                    future_map = {pool.submit(_analyze_for_args, sym, pass_args): sym for sym in pending_symbols}
-                    retry_symbols: list[str] = []
+                pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+                future_map = {pool.submit(_analyze_for_args, sym, pass_args): sym for sym in pending_symbols}
+                retry_symbols: list[str] = []
+                early_exit = False
 
-                    for fut in concurrent.futures.as_completed(future_map):
+                try:
+                    remaining_budget = max_scan_seconds - (time.time() - scan_start_ts)
+                    for fut in concurrent.futures.as_completed(future_map, timeout=max(1.0, remaining_budget)):
+                        if (time.time() - scan_start_ts) > max_scan_seconds:
+                            for pending_fut in future_map:
+                                if not pending_fut.done():
+                                    pending_fut.cancel()
+                            pool.shutdown(wait=False, cancel_futures=True)
+                            return
+
                         sym = future_map[fut]
                         scanned_symbols.add(sym)
                         scanned = len(scanned_symbols)
@@ -1338,6 +1348,27 @@ def scan_stream() -> Response:
                             out_rows[sym] = row
                         elif float(row.get("rank_score", 0.0)) > float(prev.get("rank_score", 0.0)):
                             out_rows[sym] = row
+
+                        if count_toward_found and len(out_rows) >= output_limit:
+                            early_exit = True
+                            for pending_fut in future_map:
+                                if not pending_fut.done():
+                                    pending_fut.cancel()
+                            break
+                except concurrent.futures.TimeoutError:
+                    for pending_fut in future_map:
+                        if not pending_fut.done():
+                            pending_fut.cancel()
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    return
+                finally:
+                    if early_exit:
+                        pool.shutdown(wait=False, cancel_futures=True)
+                    else:
+                        pool.shutdown(wait=True)
+
+                if early_exit:
+                    return
 
                 if retry_symbols:
                     retry_attempt += 1
@@ -1433,6 +1464,47 @@ def scan_stream() -> Response:
                 candidate_rows[sym] = row
                 if len(candidate_rows) >= output_limit:
                     break
+
+        if len(candidate_rows) < output_limit:
+            supplemental_pool = [s for s in scan_pool if s not in candidate_rows]
+            supplemental_pool.extend([s for s in symbols if s not in candidate_rows])
+            added = 0
+            for sym in supplemental_pool:
+                key = str(sym).upper()
+                if not key or key in candidate_rows:
+                    continue
+                candidate_rows[key] = {
+                    "symbol": key,
+                    "dir": "BULL",
+                    "setup": "Fallback",
+                    "phase": 1,
+                    "stage": "watch",
+                    "setup_score": 0.0,
+                    "lifecycle_score": 0.0,
+                    "bb_expansion": 0.0,
+                    "bb_width_now": 0.0,
+                    "bb_width_pct": 0.0,
+                    "bb_slope3": 0.0,
+                    "bb_osc": 0.0,
+                    "bb_regime": False,
+                    "bb_vs_prev_month": 0.0,
+                    "bb_double_age": 999,
+                    "band_ride_score": 0.0,
+                    "bb_widen_window_ok": False,
+                    "bb_widen_start_age": 999,
+                    "rank_score": 0.0,
+                }
+                added += 1
+                if len(candidate_rows) >= output_limit:
+                    break
+            if added > 0:
+                yield json.dumps(
+                    {
+                        "type": "status",
+                        "message": f"Backfilled {added} fallback symbol(s) to keep output filled.",
+                        "tier": "live",
+                    }
+                ) + "\n"
 
         if not candidate_rows:
             emergency_pool = [s for s in scan_pool if str(s).strip()] or [s for s in symbols if str(s).strip()]
