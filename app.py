@@ -1277,6 +1277,7 @@ def scan_stream() -> Response:
 
         scanned_symbols: set[str] = set()
         hard_failures: list[tuple[str, str]] = []
+        prefilter_rows: dict[str, dict[str, Any]] = {}
         def _run_pass(
             pass_label: str,
             pass_args: SimpleNamespace,
@@ -1361,10 +1362,24 @@ def scan_stream() -> Response:
             prefilter_args.require_secondary_confirmation = False
             prefilter_args.require_precision_entry = False
             prefilter_args.scan_intraday_3x = False
-            prefilter_rows: dict[str, dict[str, Any]] = {}
+            prefilter_args.allow_momentum_watchlist = True
+            prefilter_args.force_candidate_mode = True
+            prefilter_args.require_macd_stoch_cross = False
+            prefilter_args.require_band_liftoff = False
+            prefilter_args.require_widening_oscillation = False
+            prefilter_args.require_band_widen_window = False
+            prefilter_args.require_band_ride = False
+            prefilter_args.min_course_pattern_score = 0.0
+            prefilter_args.min_adx = 0.0
+            prefilter_args.max_rsi = 99.0
+            prefilter_args.max_stoch_rsi_k = 99.0
+            prefilter_args.enforce_recent_lifecycle_gate = False
+            prefilter_args.enforce_three_x_gate = False
             yield from _run_pass("prefilter", prefilter_args, scan_pool, prefilter_rows, count_toward_found=False)
             ordered_prefilter = sorted(prefilter_rows.values(), key=lambda r: float(r.get("rank_score", 0.0)), reverse=True)
             scan_pool = [str(r.get("symbol", "")).upper() for r in ordered_prefilter[:prefilter_limit] if str(r.get("symbol", "")).strip()]
+            if not scan_pool:
+                scan_pool = list(symbols)[:prefilter_limit]
             yield json.dumps(
                 {
                     "type": "status",
@@ -1422,6 +1437,35 @@ def scan_stream() -> Response:
             ) + "\n"
             yield json.dumps({"type": "done", "count": min(len(candidate_rows), output_limit), "tier": "live"}) + "\n"
             return
+
+        if not candidate_rows and prefilter_rows:
+            ordered_prefilter = sorted(prefilter_rows.values(), key=lambda r: float(r.get("rank_score", 0.0)), reverse=True)
+            for row in ordered_prefilter[:output_limit]:
+                symbol = str(row.get("symbol", "")).upper()
+                if symbol:
+                    candidate_rows[symbol] = row
+
+        if not candidate_rows:
+            emergency_budget = min(len(symbols), max(output_limit * 3, 60))
+            for sym in symbols[:emergency_budget]:
+                try:
+                    snap = _load_symbol_snapshot(sym, base_args, include_intraday=False)
+                except Exception:
+                    continue
+                if not snap:
+                    continue
+                analyzed = snap.get("daily")
+                if not analyzed:
+                    continue
+                if reference_pattern:
+                    direct_similarity = _pattern_similarity(reference_pattern, analyzed)
+                    setattr(analyzed, "pattern_similarity_direct", direct_similarity)
+                    setattr(analyzed, "pattern_similarity", direct_similarity)
+                    setattr(analyzed, "pattern_mode", str(getattr(analyzed, "setup_direction", "n/a")).upper())
+                row = _result_row(analyzed)
+                candidate_rows[sym] = row
+                if len(candidate_rows) >= output_limit:
+                    break
 
         ordered_rows = sorted(candidate_rows.values(), key=lambda r: float(r.get("rank_score", 0.0)), reverse=True)[:output_limit]
         for row in ordered_rows:
