@@ -78,6 +78,51 @@ To run the tests, use:
 npm test
 ```
 
+## Event Overlay Data Pipeline (6 Years)
+
+This repo includes scripts to build a 6-year event overlay dataset for your learning engine.
+
+### Output Files
+
+- `data/earnings_calendar.csv`
+- `data/macro_events.csv`
+- `data/news_sentiment.csv`
+- `data/event_overlay.csv` (final joined training table)
+
+### Required Input
+
+Export your v2 trades table to CSV and place it at:
+
+- `data/v2_trades.csv`
+
+Minimum required columns in v2 CSV:
+
+- date column: one of `date`, `trade_date`, `day0_date`, `opened_at`
+- ticker column: one of `ticker`, `symbol`
+
+### Run End-to-End
+
+```bash
+npm run prepare:event-data
+```
+
+### Individual Steps
+
+```bash
+npm run fetch:earnings
+npm run fetch:macro
+npm run fetch:news
+npm run build:event-overlay
+```
+
+### Optional Environment Variables
+
+- `V2_FILE_PATH=/absolute/path/to/v2.csv`
+- `TICKERS=AAPL,MSFT,NVDA` (if no v2 file is available for fetch scripts)
+- `FINNHUB_API_KEY=...` (improves historical news depth)
+- `POLYGON_API_KEY=...` (alternative historical news source)
+- `CONTACT_EMAIL=you@example.com` (used for SEC data user-agent)
+
 ## Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request for any improvements or bug fixes.

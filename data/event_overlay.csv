@@ -1,0 +1,4 @@
+date,ticker,entry_price,outcome,is_earnings_window_48h,is_fomc_day,is_cpi_day,is_nfp_day,news_count_day0,avg_sentiment_day0,news_min_sentiment_day0,news_max_sentiment_day0,news_positive_count_day0,news_negative_count_day0,news_neutral_count_day0,has_high_impact_news_day0,is_high_impact_macro_day
+2025-01-29,AAPL,188.23,win,1,1,0,0,0,0,0,0,0,0,0,0,1
+2025-03-19,MSFT,418.10,loss,0,1,0,0,0,0,0,0,0,0,0,0,1
+2024-12-11,GOOGL,132.44,win,0,0,1,0,0,0,0,0,0,0,0,0,1
