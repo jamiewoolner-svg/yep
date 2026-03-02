@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Big Island</title>
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#0d0806">
+  <style>html{background:#0d0806}</style>
   <link rel="manifest" href="/manifest.json">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
@@ -28,6 +30,7 @@
       --shadow: 0 14px 30px rgba(0, 0, 0, 0.5);
     }
     * { box-sizing: border-box; }
+    html { background: #0d0806; }
     body {
       margin: 0;
       font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
@@ -36,7 +39,9 @@
         radial-gradient(1200px 600px at 6% 0%, #2a1c14 0%, transparent 60%),
         radial-gradient(900px 450px at 94% 14%, #1e1410 0%, transparent 55%),
         linear-gradient(180deg, var(--bg), var(--bg2));
+      background-color: var(--bg);
       min-height: 100vh;
+      -webkit-overflow-scrolling: touch;
     }
     /* ── Login Screen ── */
     #login-screen {
@@ -1376,20 +1381,13 @@
           showApp();
           return;
         }
-        if (d.has_passkeys) {
-          document.getElementById('face-section').style.display = '';
-          document.getElementById('pin-section').style.display = 'none';
-        } else {
-          // No passkeys enrolled — go straight to PIN
-          document.getElementById('face-section').style.display = 'none';
-          document.getElementById('pin-section').style.display = '';
-          setupPinBoxes();
-        }
+        // Always show Face ID first — it's the primary login
+        document.getElementById('face-section').style.display = '';
+        document.getElementById('pin-section').style.display = 'none';
       } catch(e) {
-        // If auth check fails, show PIN
-        document.getElementById('face-section').style.display = 'none';
-        document.getElementById('pin-section').style.display = '';
-        setupPinBoxes();
+        // If auth check fails, still show Face ID first
+        document.getElementById('face-section').style.display = '';
+        document.getElementById('pin-section').style.display = 'none';
       }
     }
 
