@@ -1520,7 +1520,7 @@
 
     async function showApp() {
       document.getElementById('login-screen').style.display = 'none';
-      document.getElementById('app-content').style.display = '';
+      document.getElementById('app-content').style.display = 'block';
       // Show "Setup Face ID" button if no passkeys enrolled yet
       try {
         const r = await fetch('/api/auth/check');
