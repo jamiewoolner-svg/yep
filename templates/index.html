@@ -399,10 +399,31 @@
       box-shadow: 0 -4px 30px rgba(0,0,0,0.5);
     }
     .kam-panel.open { transform: translateY(0); }
+    /* Speech bubble next to FAB */
+    .kam-speech {
+      position: fixed;
+      bottom: 110px;
+      right: 160px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px 12px 12px 4px;
+      padding: 8px 12px;
+      font-size: 13px;
+      color: var(--gold);
+      z-index: 199;
+      max-width: 180px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+      animation: kam-speech-fade 0.3s ease;
+    }
+    @keyframes kam-speech-fade {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
     @media (max-width: 500px) {
       .kam-panel { width: 100%; border-radius: 16px 16px 0 0; }
       .kam-fab { bottom: 16px; right: 16px; width: 90px; height: 90px; }
       .kam-emoji { font-size: 16px; }
+      .kam-speech { display: none; }
     }
     .kam-header {
       display: flex;
@@ -808,8 +829,8 @@
       </div>
 
       <div class="dash-actions">
-        <button class="dash-btn dash-btn-pause" id="dash-pause" onclick="togglePause()">⏸ Pause Trading</button>
-        <button class="dash-btn dash-btn-panic" id="dash-panic" onclick="openPanic()">🚨 Panic Sell</button>
+        <button class="dash-btn dash-btn-pause" id="dash-pause" onclick="togglePause()">🌺 Ho'omaha (Pause)</button>
+        <button class="dash-btn dash-btn-panic" id="dash-panic" onclick="openPanic()">🌋 Pele's Wrath</button>
       </div>
 
       <div class="dash-cards" id="dash-cards">
@@ -937,11 +958,11 @@
   <!-- Panic Modal -->
   <div class="panic-overlay" id="panic-overlay">
     <div class="panic-modal">
-      <h2>🚨 Panic Sell</h2>
-      <p>This will halt all trading activity, clear caches, and pause the system. Are you sure?</p>
+      <h2>🌋 Pele's Wrath</h2>
+      <p>This will halt all trading activity, clear caches, and pause the system. No ka oi — are you sure, brah?</p>
       <div class="panic-modal-btns">
-        <button class="panic-cancel" onclick="closePanic()">Cancel</button>
-        <button class="panic-confirm" onclick="confirmPanic()">Stop Everything</button>
+        <button class="panic-cancel" onclick="closePanic()">Nah, We Good</button>
+        <button class="panic-confirm" onclick="confirmPanic()">🌋 Burn It Down</button>
       </div>
     </div>
   </div>
@@ -959,6 +980,8 @@
     </div>
     <span class="kam-badge" id="kam-badge"></span>
   </button>
+  <!-- Speech bubble next to FAB -->
+  <div class="kam-speech" id="kam-speech">Howzit brah! 🤙</div>
   <!-- Pullback tab (when FAB is swiped away) -->
   <div class="kam-pullback" id="kam-pullback" onclick="showKamFab()">🤙</div>
 
@@ -966,7 +989,7 @@
   <div class="kam-panel" id="kam-panel">
     <div class="kam-header">
       <div class="kam-header-left">
-        <img src="/king-kam.png" alt="King Kam" style="width:38px;height:38px;border-radius:50%;object-fit:cover;border:2px solid #daa520;">
+        <img src="/king-kam.png" alt="King Kam" style="width:64px;height:64px;border-radius:50%;object-fit:cover;border:2px solid #daa520;">
         <div>
           <div class="kam-name">King Kam</div>
           <div class="kam-subtitle" id="kam-status">Loading...</div>
@@ -975,14 +998,14 @@
       <button class="kam-close" onclick="toggleKam()">&times;</button>
     </div>
     <div class="kam-quick">
-      <button class="kam-quick-btn" onclick="kamQuick('What does da market look like right now?')">Market check</button>
-      <button class="kam-quick-btn" onclick="kamQuick('Explain how the Kona signal system works')">How Kona works</button>
-      <button class="kam-quick-btn" onclick="kamQuick('What should I watch for this week?')">This week</button>
-      <button class="kam-quick-btn" onclick="kamQuick('Explain BB% and Stoch for a beginner')">Teach me</button>
-      <button class="kam-quick-btn" onclick="kamQuick('Run diagnostics on the scanner and check system health')">Diagnostics</button>
-      <button class="kam-quick-btn" onclick="kamQuick('Check my risk exposure based on recent trades')">Risk check</button>
-      <button class="kam-quick-btn" onclick="kamQuick('Give me a summary report of my trading performance')">View reports</button>
-      <button class="kam-quick-btn" onclick="kamQuick('I found a bug or issue with the app')">Bug report</button>
+      <button class="kam-quick-btn" onclick="kamQuick('What does da market look like right now?')">🌊 Market Swell</button>
+      <button class="kam-quick-btn" onclick="kamQuick('Explain how the Kona signal system works')">🌴 How Kona Works</button>
+      <button class="kam-quick-btn" onclick="kamQuick('What should I watch for this week?')">🏖️ Dis Week</button>
+      <button class="kam-quick-btn" onclick="kamQuick('Explain BB% and Stoch for a beginner')">🎓 Teach Me Brah</button>
+      <button class="kam-quick-btn" onclick="kamQuick('Run diagnostics on the system and check health')">🔧 Check Da Engine</button>
+      <button class="kam-quick-btn" onclick="kamQuick('Check my risk exposure based on recent trades')">🐙 Risk Tako</button>
+      <button class="kam-quick-btn" onclick="kamQuick('Give me a summary report of my trading performance')">📊 Da Report</button>
+      <button class="kam-quick-btn" onclick="kamQuick('I found a bug or issue with the app')">🐛 Cockroach Report</button>
     </div>
     <div class="kam-messages" id="kam-messages">
       <div class="kam-msg kam-msg-ai">Aloha brudda! King Kam stay ready. Ask me about da market, Kona signals, or whateva you need. Shoots! 🤙</div>
@@ -1415,9 +1438,25 @@
     /* ── King Kam chatbot ── */
     let kamOpen = false;
 
+    // Speech bubble greetings
+    const kamGreetings = [
+      'Howzit brah! 🤙', 'Market stay moving! 📈', 'Talk story? 🌺',
+      'Kona stay sharp! 🏄', 'Aloha! Ask me anything 🌴', 'Eh, check da trades! 🐙',
+    ];
+    let speechIdx = 0;
+    setInterval(() => {
+      const bubble = document.getElementById('kam-speech');
+      if (bubble && !kamOpen) {
+        speechIdx = (speechIdx + 1) % kamGreetings.length;
+        bubble.textContent = kamGreetings[speechIdx];
+      }
+    }, 8000);
+
     function toggleKam() {
       kamOpen = !kamOpen;
       document.getElementById('kam-panel').classList.toggle('open', kamOpen);
+      const speech = document.getElementById('kam-speech');
+      if (speech) speech.style.display = kamOpen ? 'none' : 'block';
       if (kamOpen) document.getElementById('kam-input').focus();
     }
 
@@ -1726,10 +1765,10 @@
     function updatePauseBtn() {
       const btn = document.getElementById('dash-pause');
       if (scannerPaused) {
-        btn.textContent = '▶ Resume Trading';
+        btn.textContent = '🏄 Imua! (Resume)';
         btn.classList.add('paused');
       } else {
-        btn.textContent = '⏸ Pause Trading';
+        btn.textContent = '🌺 Ho\u0027omaha (Pause)';
         btn.classList.remove('paused');
       }
     }
