@@ -961,16 +961,9 @@
       </div>
     </div>
 
-    <div class="tab-bar">
-      <button class="tab-btn active" data-tab="tradelog" onclick="showTab('tradelog')">Trade Ledger</button>
-      <button class="tab-btn" data-tab="watchlist" onclick="showTab('watchlist')">Watchlist</button>
-      <button class="tab-btn" data-tab="journal" onclick="showTab('journal')">Journal</button>
-    </div>
-
-    <!-- ── Trade Ledger Tab ── -->
-    <div id="tradelog-tab" class="tab-content active">
-      <div class="card" style="padding:14px;overflow-x:auto;">
-        <h2 style="margin:0 0 4px;">📖 Trade Ledger</h2>
+    <!-- 🗿 Ancient Wisdom — trade history -->
+    <div class="card" style="padding:14px;overflow-x:auto;">
+        <h2 style="margin:0 0 4px;">🗿 Ancient Wisdom</h2>
         <p style="color:var(--muted);font-size:12px;margin:0 0 12px;">Complete record of all trades</p>
         <table class="ledger-table" id="tradelog-table">
           <thead>
@@ -988,7 +981,6 @@
           <tbody id="tradelog-body"></tbody>
         </table>
         <div id="tradelog-empty" style="color:var(--muted);font-size:13px;padding:20px 0;text-align:center;display:none;">No trades recorded yet</div>
-      </div>
     </div>
 
     <div id="watchlist-tab" class="tab-content">
