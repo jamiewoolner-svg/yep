@@ -1370,6 +1370,7 @@
     /* ── Auth / Login ─────────────────────────────────────────── */
     let faceAttempts = 0;
     let pinAttempts = 0;
+    let hasPasskeys = false;
     const MAX_FACE = 3;
     const MAX_PIN = 3;
 
@@ -1381,13 +1382,23 @@
           showApp();
           return;
         }
-        // Always show Face ID first — it's the primary login
-        document.getElementById('face-section').style.display = '';
-        document.getElementById('pin-section').style.display = 'none';
+        hasPasskeys = d.has_passkeys;
+        if (hasPasskeys) {
+          // Face ID enrolled — show as primary login
+          document.getElementById('face-section').style.display = '';
+          document.getElementById('pin-section').style.display = 'none';
+        } else {
+          // No Face ID yet — show PIN with setup prompt
+          document.getElementById('face-section').style.display = '';
+          document.getElementById('face-btn').textContent = '🤙 Sign In with Face ID';
+          document.getElementById('login-attempts').textContent = 'First time? Enter PIN below, then set up Face ID.';
+          document.getElementById('pin-section').style.display = '';
+          setupPinBoxes();
+        }
       } catch(e) {
-        // If auth check fails, still show Face ID first
-        document.getElementById('face-section').style.display = '';
-        document.getElementById('pin-section').style.display = 'none';
+        document.getElementById('face-section').style.display = 'none';
+        document.getElementById('pin-section').style.display = '';
+        setupPinBoxes();
       }
     }
 
@@ -1395,6 +1406,15 @@
       const btn = document.getElementById('face-btn');
       const err = document.getElementById('login-error');
       const attempts = document.getElementById('login-attempts');
+
+      if (!hasPasskeys) {
+        // No passkeys enrolled — tell user to use PIN first
+        err.textContent = 'Set up Face ID after logging in with PIN.';
+        document.getElementById('pin-section').style.display = '';
+        setupPinBoxes();
+        return;
+      }
+
       btn.disabled = true;
       err.textContent = '';
 
@@ -1437,7 +1457,7 @@
           document.getElementById('pin-section').style.display = '';
           setupPinBoxes();
         } else {
-          err.textContent = e.message || 'Face ID failed';
+          err.textContent = e.message || 'Face ID failed — try again';
           attempts.textContent = `Attempt ${faceAttempts}/${MAX_FACE}`;
           btn.disabled = false;
         }
