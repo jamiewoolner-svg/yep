@@ -407,14 +407,17 @@
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: 12px 12px 12px 4px;
-      padding: 8px 12px;
-      font-size: 13px;
-      color: var(--gold);
+      padding: 10px 14px;
+      font-size: 12px;
+      color: var(--ink);
       z-index: 199;
-      max-width: 180px;
+      max-width: 220px;
+      line-height: 1.5;
       box-shadow: 0 4px 16px rgba(0,0,0,0.3);
       animation: kam-speech-fade 0.3s ease;
     }
+    .kam-speech .speech-market { color: var(--gold); }
+    .kam-speech .speech-folio { color: var(--muted); font-size: 11px; }
     @keyframes kam-speech-fade {
       from { opacity: 0; transform: translateY(8px); }
       to { opacity: 1; transform: translateY(0); }
@@ -981,7 +984,10 @@
     <span class="kam-badge" id="kam-badge"></span>
   </button>
   <!-- Speech bubble next to FAB -->
-  <div class="kam-speech" id="kam-speech">Howzit brah! 🤙</div>
+  <div class="kam-speech" id="kam-speech">
+    <div class="speech-market" id="speech-market">Checking da market... 🌊</div>
+    <div class="speech-folio" id="speech-folio">Loading your trades... 🤙</div>
+  </div>
   <!-- Pullback tab (when FAB is swiped away) -->
   <div class="kam-pullback" id="kam-pullback" onclick="showKamFab()">🤙</div>
 
@@ -1438,19 +1444,38 @@
     /* ── King Kam chatbot ── */
     let kamOpen = false;
 
-    // Speech bubble greetings
-    const kamGreetings = [
-      'Howzit brah! 🤙', 'Market stay moving! 📈', 'Talk story? 🌺',
-      'Kona stay sharp! 🏄', 'Aloha! Ask me anything 🌴', 'Eh, check da trades! 🐙',
+    // Speech bubble — market + portfolio sentiment
+    const marketVibes = [
+      'Market stay chill today 🌊', 'Waves looking good out there 🏄',
+      'Market stay choppy, brah 🌊', 'Tides shifting... watch um 🌅',
+      'Smooth sailing so far 🚣', 'Kona reading da signals 🌺',
+      'Bulls and bears fighting 🐂', 'Market doing its ting 📈',
     ];
-    let speechIdx = 0;
-    setInterval(() => {
-      const bubble = document.getElementById('kam-speech');
-      if (bubble && !kamOpen) {
-        speechIdx = (speechIdx + 1) % kamGreetings.length;
-        bubble.textContent = kamGreetings[speechIdx];
-      }
-    }, 8000);
+    function getPortfolioVibe() {
+      try {
+        const trades = JSON.parse(localStorage.getItem('kona_pnl_trades') || '[]');
+        if (!trades.length) return 'No trades yet — go catch some waves! 🏖️';
+        const total = trades.reduce((s, t) => s + (t.amt || 0), 0);
+        const recent = trades.slice(-3);
+        const recentPnl = recent.reduce((s, t) => s + (t.amt || 0), 0);
+        if (total > 500) return 'Portfolio stay blessed, brah! 🤙 +$' + total.toFixed(0);
+        if (total > 0) return 'We up small — $' + total.toFixed(0) + ' keep grinding 🌴';
+        if (total > -200) return 'Little dip, no stress — $' + total.toFixed(0) + ' 🐢';
+        if (total <= -200) return 'Rough waters — $' + total.toFixed(0) + ' hang tough 🌋';
+        if (recentPnl > 0) return 'Last few trades looking ono! 🍍';
+        return trades.length + ' trades in da book 📖';
+      } catch(e) { return 'Talk story wit me! 🤙'; }
+    }
+    let marketIdx = 0;
+    function updateSpeechBubble() {
+      if (kamOpen) return;
+      const mkt = document.getElementById('speech-market');
+      const fol = document.getElementById('speech-folio');
+      if (mkt) { marketIdx = (marketIdx + 1) % marketVibes.length; mkt.textContent = marketVibes[marketIdx]; }
+      if (fol) fol.textContent = getPortfolioVibe();
+    }
+    updateSpeechBubble();
+    setInterval(updateSpeechBubble, 10000);
 
     function toggleKam() {
       kamOpen = !kamOpen;
