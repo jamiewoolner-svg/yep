@@ -6,12 +6,14 @@ import concurrent.futures
 import copy
 import hashlib
 import json
+import logging
 import math
 import os
 import re
 import secrets
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,6 +23,9 @@ from html import unescape
 from io import BytesIO
 from types import SimpleNamespace
 from typing import Any
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)s %(levelname)s %(message)s')
+_log = logging.getLogger('bigisland')
 
 from flask import Flask, Response, jsonify, make_response, redirect, render_template, render_template_string, request, send_file, session, stream_with_context
 
@@ -54,6 +59,20 @@ from stock_scanner import (
 app = Flask(__name__)
 app.secret_key = os.environ.get('BI_SECRET', secrets.token_hex(32))
 app.permanent_session_lifetime = timedelta(days=30)
+
+# ── Startup tracking ──
+_STARTUP_ERRORS: list[str] = []
+_STARTUP_TIME = datetime.now().isoformat()
+
+
+@app.errorhandler(500)
+def handle_500(e):
+    _log.error("500 error: %s\n%s", e, traceback.format_exc())
+    return jsonify({
+        'error': 'Internal server error',
+        'detail': str(e),
+        'startup_errors': _STARTUP_ERRORS,
+    }), 500
 
 # ── Auth config ──────────────────────────────────────────────────
 PIN_CODE = os.environ.get('BI_PIN', '526439')
@@ -224,9 +243,14 @@ def logout():
 try:
     from bi_logos import BI_LOGO_B64, BI_ICON_B64, KONA_LOGO_B64, KING_KAM_B64, KING_KAM_FAV_B64
     HAS_LOGOS = True
-except ImportError:
+    _log.info("Logos loaded OK (BI=%d, KONA=%d, KAM=%d bytes b64)",
+              len(BI_LOGO_B64), len(KONA_LOGO_B64), len(KING_KAM_B64))
+except Exception as _logo_err:
     HAS_LOGOS = False
     BI_LOGO_B64 = BI_ICON_B64 = KONA_LOGO_B64 = KING_KAM_B64 = KING_KAM_FAV_B64 = ''
+    _msg = f"Logo import failed: {_logo_err}"
+    _log.warning(_msg)
+    _STARTUP_ERRORS.append(_msg)
 
 
 @app.route('/manifest.json')
@@ -1384,6 +1408,22 @@ def healthz() -> Response:
     return Response("ok\n", mimetype="text/plain")
 
 
+@app.route("/debug")
+def debug_info() -> Response:
+    import sys
+    return jsonify({
+        'ok': True,
+        'python': sys.version,
+        'startup_time': _STARTUP_TIME,
+        'startup_errors': _STARTUP_ERRORS,
+        'has_logos': HAS_LOGOS,
+        'has_anthropic': HAS_ANTHROPIC,
+        'has_kona_ai': _kona_ai is not None,
+        'data_dir': _DATA_DIR,
+        'env_keys': sorted([k for k in os.environ if k.startswith(('BI_', 'KONA_', 'ANTHROPIC_', 'SCANNER_', 'POLYGON_'))]),
+    })
+
+
 @app.route("/scan_stream", methods=["POST"])
 @require_auth
 def scan_stream() -> Response:
@@ -2235,8 +2275,11 @@ try:
     from kona_ai_consultant import KonaAI
     _kona_ai = KonaAI(data_dir=_DATA_DIR)
     _kona_ai.start_monitor()
-except Exception:
-    pass  # Graceful fallback — simple chat still works
+    _log.info("KonaAI consultant initialized OK")
+except Exception as _ai_err:
+    _msg = f"KonaAI init failed (non-fatal): {_ai_err}"
+    _log.warning(_msg)
+    _STARTUP_ERRORS.append(_msg)
 
 KONA_SYSTEM_PROMPT = """You are King Kam (King Kamehameha), the AI assistant built into the Kona options trading webapp.
 You help the user understand their trades, the market, and historical context.
