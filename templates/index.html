@@ -1107,10 +1107,10 @@
     <div class="kam-messages" id="kam-messages">
       <div class="kam-msg kam-msg-ai">Aloha brudda! King Kam stay ready. Ask me about da market, Kona signals, or whateva you need. Shoots! 🤙</div>
     </div>
-    <div class="kam-input-row">
-      <input class="kam-input" id="kam-input" placeholder="Ask King Kam..." onkeydown="if(event.key==='Enter')kamSend()">
-      <button class="kam-send-btn" id="kam-send" onclick="kamSend()">Send</button>
-    </div>
+    <form class="kam-input-row" onsubmit="event.preventDefault();kamSend();">
+      <input class="kam-input" id="kam-input" placeholder="Ask King Kam..." autocomplete="off">
+      <button type="submit" class="kam-send-btn" id="kam-send">Send</button>
+    </form>
   </div>
 
   <script>
