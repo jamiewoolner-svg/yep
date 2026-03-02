@@ -408,6 +408,38 @@
     }
     .kam-send-btn:hover { transform: none; opacity: 0.9; }
     .kam-send-btn:disabled { opacity: 0.4; }
+
+    /* P&L Card */
+    .pnl-card { padding: 14px 18px; }
+    .pnl-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+    .pnl-total { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; }
+    .pnl-total.pos { color: #4ade80; }
+    .pnl-total.neg { color: #f87171; }
+    .pnl-total.zero { color: var(--muted); }
+    .pnl-stats { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .pnl-controls { display: flex; gap: 6px; }
+    .pnl-btn {
+      padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 700;
+      background: linear-gradient(125deg, var(--accent), var(--accent-dark)); color: #fff;
+      border: 0; cursor: pointer;
+    }
+    .pnl-btn-muted { background: #1a2e40; border: 1px solid var(--line); color: var(--muted); }
+    .pnl-recent { margin-top: 8px; }
+    .pnl-trade-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 5px 0; border-bottom: 1px solid #1e3040; font-size: 13px;
+    }
+    .pnl-trade-row:last-child { border-bottom: none; }
+    .pnl-trade-ticker { font-weight: 700; min-width: 60px; }
+    .pnl-trade-date { color: var(--muted); font-size: 11px; }
+    .pnl-trade-amt { font-weight: 700; }
+    .pnl-trade-amt.pos { color: #4ade80; }
+    .pnl-trade-amt.neg { color: #f87171; }
+    .pnl-trade-del { cursor: pointer; color: #555; font-size: 14px; padding: 2px 6px; }
+    .pnl-trade-del:hover { color: var(--danger); }
+    @media (max-width: 600px) {
+      .pnl-total { font-size: 22px; }
+    }
   </style>
 </head>
 <body>
@@ -418,6 +450,25 @@
         <span class="brand-name">YEPSTOCKS SIGNAL LAB</span>
       </div>
       <span class="brand-tag">Find The Fat Pitch</span>
+    </div>
+
+    <!-- ── P&L Chart ────────────────────────────────────────── -->
+    <div class="card pnl-card">
+      <div class="pnl-header">
+        <div>
+          <h3 style="margin-bottom:4px;">Total P&amp;L</h3>
+          <span id="pnl-total" class="pnl-total">$0</span>
+          <span id="pnl-stats" class="pnl-stats"></span>
+        </div>
+        <div class="pnl-controls">
+          <button class="pnl-btn" onclick="pnlPromptAdd()">+ Log Trade</button>
+          <button class="pnl-btn pnl-btn-muted" onclick="pnlToggleChart()">Chart</button>
+        </div>
+      </div>
+      <div id="pnl-chart-wrap" style="display:none;">
+        <div id="pnl-chart" style="width:100%;height:180px;"></div>
+      </div>
+      <div id="pnl-recent" class="pnl-recent"></div>
     </div>
 
     <div class="tab-bar">
@@ -1069,6 +1120,115 @@
     }
 
     /* ── Watchlist scanner ── */
+    /* ── P&L Tracker ──────────────────────────────────────────── */
+    const PNL_KEY = 'kona_pnl_trades';
+    function pnlLoad() {
+      try { return JSON.parse(localStorage.getItem(PNL_KEY)) || []; }
+      catch { return []; }
+    }
+    function pnlSave(trades) { localStorage.setItem(PNL_KEY, JSON.stringify(trades)); }
+
+    function pnlRender() {
+      const trades = pnlLoad();
+      // Total
+      const total = trades.reduce((s, t) => s + t.amt, 0);
+      const totalEl = document.getElementById('pnl-total');
+      totalEl.textContent = (total >= 0 ? '+$' : '-$') + Math.abs(total).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+      totalEl.className = 'pnl-total ' + (total > 0 ? 'pos' : total < 0 ? 'neg' : 'zero');
+      // Stats
+      const wins = trades.filter(t => t.amt > 0).length;
+      const losses = trades.filter(t => t.amt < 0).length;
+      const statsEl = document.getElementById('pnl-stats');
+      if (trades.length > 0) {
+        const wr = ((wins / trades.length) * 100).toFixed(0);
+        statsEl.textContent = trades.length + ' trades · ' + wr + '% win rate · ' + wins + 'W / ' + losses + 'L';
+      } else {
+        statsEl.textContent = 'No trades logged yet';
+      }
+      // Recent trades (last 5)
+      const recent = document.getElementById('pnl-recent');
+      recent.innerHTML = '';
+      const show = trades.slice(-5).reverse();
+      show.forEach((t, i) => {
+        const idx = trades.length - 1 - i;
+        const row = document.createElement('div');
+        row.className = 'pnl-trade-row';
+        const amtClass = t.amt >= 0 ? 'pos' : 'neg';
+        const amtStr = (t.amt >= 0 ? '+$' : '-$') + Math.abs(t.amt).toFixed(2);
+        row.innerHTML = '<span class="pnl-trade-ticker">' + (t.ticker || '') + '</span>'
+          + '<span class="pnl-trade-date">' + (t.date || '') + ' · ' + (t.side || '') + '</span>'
+          + '<span class="pnl-trade-amt ' + amtClass + '">' + amtStr + '</span>'
+          + '<span class="pnl-trade-del" onclick="pnlDelete(' + idx + ')">×</span>';
+        recent.appendChild(row);
+      });
+      // Chart
+      pnlDrawChart(trades);
+    }
+
+    function pnlDrawChart(trades) {
+      const wrap = document.getElementById('pnl-chart-wrap');
+      if (wrap.style.display === 'none' || trades.length < 2) return;
+      let cum = 0;
+      const dates = [];
+      const vals = [];
+      trades.forEach(t => {
+        cum += t.amt;
+        dates.push(t.date);
+        vals.push(cum);
+      });
+      const colors = vals.map(v => v >= 0 ? '#4ade80' : '#f87171');
+      Plotly.newPlot('pnl-chart', [{
+        x: dates, y: vals, type: 'scatter', mode: 'lines+markers',
+        line: { color: vals[vals.length-1] >= 0 ? '#4ade80' : '#f87171', width: 2 },
+        marker: { size: 5, color: colors },
+        fill: 'tozeroy',
+        fillcolor: vals[vals.length-1] >= 0 ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)',
+      }], {
+        paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+        margin: { t: 5, b: 30, l: 50, r: 10 },
+        xaxis: { color: '#9db0c0', gridcolor: '#1e3040', tickfont: { size: 10 } },
+        yaxis: { color: '#9db0c0', gridcolor: '#1e3040', tickprefix: '$', tickfont: { size: 10 },
+                 zeroline: true, zerolinecolor: '#3d5c74', zerolinewidth: 1 },
+        font: { family: 'inherit', color: '#9db0c0' },
+      }, { displayModeBar: false, responsive: true });
+    }
+
+    function pnlToggleChart() {
+      const wrap = document.getElementById('pnl-chart-wrap');
+      wrap.style.display = wrap.style.display === 'none' ? 'block' : 'none';
+      if (wrap.style.display === 'block') pnlRender();
+    }
+
+    function pnlPromptAdd() {
+      const ticker = prompt('Ticker (e.g. AAPL):');
+      if (!ticker) return;
+      const side = prompt('Side (call/put):') || 'call';
+      const amtStr = prompt('P&L amount (positive = win, negative = loss, e.g. 450 or -200):');
+      if (amtStr === null) return;
+      const amt = parseFloat(amtStr);
+      if (isNaN(amt)) { alert('Invalid amount'); return; }
+      const trades = pnlLoad();
+      trades.push({
+        ticker: ticker.toUpperCase().trim(),
+        side: side.toLowerCase().trim(),
+        amt: amt,
+        date: new Date().toISOString().slice(0, 10),
+      });
+      pnlSave(trades);
+      pnlRender();
+    }
+
+    function pnlDelete(idx) {
+      if (!confirm('Remove this trade?')) return;
+      const trades = pnlLoad();
+      trades.splice(idx, 1);
+      pnlSave(trades);
+      pnlRender();
+    }
+
+    // Init P&L on load
+    pnlRender();
+
     function scanWatchlist() {
       const btn = document.getElementById('wl-scan-btn');
       const statusEl = document.getElementById('wl-scan-status');

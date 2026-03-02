@@ -16,3 +16,5 @@ services:
         sync: false
       - key: POLYGON_API_KEY
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
