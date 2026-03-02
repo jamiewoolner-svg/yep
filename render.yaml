@@ -18,3 +18,9 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: BI_RP_ID
+        sync: false
+      - key: BI_PIN
+        sync: false
+      - key: BI_SECRET
+        sync: false
