@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
 import concurrent.futures
 import copy
+import hashlib
 import json
 import math
 import os
 import re
+import secrets
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
+from functools import wraps
 from html import unescape
+from io import BytesIO
 from types import SimpleNamespace
 from typing import Any
 
-from flask import Flask, Response, jsonify, render_template, render_template_string, request, stream_with_context
+from flask import Flask, Response, jsonify, make_response, redirect, render_template, render_template_string, request, send_file, session, stream_with_context
 
 from stock_scanner import (
     Candle,
@@ -47,6 +52,226 @@ from stock_scanner import (
 )
 
 app = Flask(__name__)
+app.secret_key = os.environ.get('BI_SECRET', secrets.token_hex(32))
+app.permanent_session_lifetime = timedelta(days=30)
+
+# ── Auth config ──────────────────────────────────────────────────
+PIN_CODE = os.environ.get('BI_PIN', '526439')
+MAX_PASSKEYS = 3
+RP_ID = os.environ.get('BI_RP_ID', 'localhost')
+RP_NAME = 'Big Island'
+USER_ID = b'kona-trader-01'
+USER_NAME = os.environ.get('BI_USER', 'jamie')
+APP_ENV = os.environ.get('APP_ENV', 'paper')
+_DATA_DIR = os.environ.get('KONA_STATE_DIR', '') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+CRED_FILE = os.path.join(_DATA_DIR, 'bi_credentials.json')
+MAX_FACE_ATTEMPTS = 3
+MAX_PIN_ATTEMPTS = 3
+
+
+def _load_credentials():
+    try:
+        with open(CRED_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {'passkeys': [], 'challenges': {}}
+
+
+def _save_credentials(creds):
+    os.makedirs(os.path.dirname(CRED_FILE), exist_ok=True)
+    with open(CRED_FILE, 'w') as f:
+        json.dump(creds, f, indent=2)
+
+
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('authenticated'):
+            if request.is_json or request.path.startswith('/api/'):
+                return jsonify({'error': 'unauthorized'}), 401
+            return redirect('/')
+        return f(*args, **kwargs)
+    return decorated
+
+
+# ── Auth routes ──────────────────────────────────────────────────
+
+@app.route('/api/auth/pin', methods=['POST'])
+def auth_pin():
+    data = request.get_json()
+    if not PIN_CODE:
+        return jsonify({'ok': False, 'error': 'PIN not configured'}), 403
+    time.sleep(0.3)
+    if data.get('pin') == PIN_CODE:
+        session.permanent = True
+        session['authenticated'] = True
+        session['auth_method'] = 'pin'
+        return jsonify({'ok': True})
+    return jsonify({'ok': False, 'error': 'Invalid PIN'}), 401
+
+
+@app.route('/api/auth/webauthn/register-options', methods=['POST'])
+def webauthn_register_options():
+    if not session.get('authenticated'):
+        return jsonify({'error': 'Log in with PIN before enrolling a passkey'}), 401
+    creds = _load_credentials()
+    if len(creds.get('passkeys', [])) >= MAX_PASSKEYS:
+        return jsonify({'error': f'Max {MAX_PASSKEYS} passkeys allowed'}), 403
+    challenge = secrets.token_urlsafe(32)
+    creds['challenges'] = creds.get('challenges', {})
+    creds['challenges']['register'] = challenge
+    _save_credentials(creds)
+    return jsonify({
+        'challenge': challenge,
+        'rp': {'id': RP_ID, 'name': RP_NAME},
+        'user': {
+            'id': base64.urlsafe_b64encode(USER_ID).decode(),
+            'name': USER_NAME,
+            'displayName': 'Kona Trader'
+        },
+        'pubKeyCredParams': [
+            {'type': 'public-key', 'alg': -7},
+            {'type': 'public-key', 'alg': -257},
+        ],
+        'authenticatorSelection': {
+            'authenticatorAttachment': 'platform',
+            'userVerification': 'required',
+            'residentKey': 'preferred',
+        },
+        'timeout': 60000,
+    })
+
+
+@app.route('/api/auth/webauthn/register', methods=['POST'])
+def webauthn_register():
+    if not session.get('authenticated'):
+        return jsonify({'error': 'unauthorized'}), 401
+    data = request.get_json()
+    creds = _load_credentials()
+    creds['passkeys'] = creds.get('passkeys', [])
+    if len(creds['passkeys']) >= MAX_PASSKEYS:
+        return jsonify({'error': f'Max {MAX_PASSKEYS} passkeys allowed'}), 403
+    creds['passkeys'].append({
+        'id': data.get('id'),
+        'rawId': data.get('rawId'),
+        'type': data.get('type'),
+        'created_at': datetime.utcnow().isoformat(),
+    })
+    _save_credentials(creds)
+    session.permanent = True
+    session['authenticated'] = True
+    session['auth_method'] = 'passkey'
+    return jsonify({'ok': True})
+
+
+@app.route('/api/auth/webauthn/auth-options', methods=['POST'])
+def webauthn_auth_options():
+    challenge = secrets.token_urlsafe(32)
+    creds = _load_credentials()
+    creds['challenges'] = creds.get('challenges', {})
+    creds['challenges']['auth'] = challenge
+    _save_credentials(creds)
+    allow = [{'type': 'public-key', 'id': pk['rawId']}
+             for pk in creds.get('passkeys', [])]
+    return jsonify({
+        'challenge': challenge,
+        'rpId': RP_ID,
+        'allowCredentials': allow,
+        'userVerification': 'required',
+        'timeout': 60000,
+    })
+
+
+@app.route('/api/auth/webauthn/authenticate', methods=['POST'])
+def webauthn_authenticate():
+    data = request.get_json()
+    creds = _load_credentials()
+    known_ids = {pk['id'] for pk in creds.get('passkeys', [])}
+    if data.get('id') in known_ids:
+        session.permanent = True
+        session['authenticated'] = True
+        session['auth_method'] = 'passkey'
+        return jsonify({'ok': True})
+    return jsonify({'ok': False, 'error': 'Unknown credential'}), 401
+
+
+@app.route('/api/auth/check')
+def auth_check():
+    creds = _load_credentials()
+    has_passkeys = len(creds.get('passkeys', [])) > 0
+    return jsonify({
+        'has_passkeys': has_passkeys,
+        'authenticated': session.get('authenticated', False),
+        'max_face_attempts': MAX_FACE_ATTEMPTS,
+        'max_pin_attempts': MAX_PIN_ATTEMPTS,
+    })
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def logout_api():
+    session.clear()
+    return jsonify({'ok': True})
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/')
+
+
+# ── Logo routes ──────────────────────────────────────────────────
+
+try:
+    from bi_logos import BI_LOGO_B64, BI_ICON_B64, KONA_LOGO_B64, KING_KAM_B64, KING_KAM_FAV_B64
+    HAS_LOGOS = True
+except ImportError:
+    HAS_LOGOS = False
+    BI_LOGO_B64 = BI_ICON_B64 = KONA_LOGO_B64 = KING_KAM_B64 = KING_KAM_FAV_B64 = ''
+
+
+@app.route('/manifest.json')
+def pwa_manifest():
+    return jsonify({"name": "Big Island", "short_name": "Big Island", "start_url": "/",
+                    "display": "standalone", "background_color": "#0d0806", "theme_color": "#0d0806",
+                    "icons": [{"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"}]})
+
+
+@app.route('/icon-192.png')
+@app.route('/icon-512.png')
+@app.route('/apple-touch-icon.png')
+def app_icon():
+    if BI_ICON_B64:
+        return send_file(BytesIO(base64.b64decode(BI_ICON_B64)), mimetype='image/png')
+    return '', 204
+
+
+@app.route('/bi-logo.png')
+def bi_logo():
+    if BI_LOGO_B64:
+        return send_file(BytesIO(base64.b64decode(BI_LOGO_B64)), mimetype='image/png')
+    return '', 204
+
+
+@app.route('/kona-logo.png')
+def kona_logo():
+    if KONA_LOGO_B64:
+        return send_file(BytesIO(base64.b64decode(KONA_LOGO_B64)), mimetype='image/png')
+    return '', 204
+
+
+@app.route('/king-kam.png')
+def king_kam_icon():
+    if KING_KAM_B64:
+        return send_file(BytesIO(base64.b64decode(KING_KAM_B64)), mimetype='image/png')
+    return '', 204
+
+
+@app.route('/favicon.ico')
+def favicon():
+    if KING_KAM_FAV_B64:
+        return send_file(BytesIO(base64.b64decode(KING_KAM_FAV_B64)), mimetype='image/x-icon')
+    return '', 204
+
 
 FED_CALENDAR_ROOT = "https://www.federalreserve.gov"
 FED_WHATS_NEXT_URL = "https://www.federalreserve.gov/whatsnext.htm"
@@ -1147,6 +1372,7 @@ def build_chart_payload(symbol: str, days: int, requested_timeframes: list[str] 
 
 @app.route("/", methods=["GET", "POST"])
 def index() -> str:
+    # Always serve index.html — JS handles login/app switching client-side
     fallback_error = ""
     if request.method == "POST":
         fallback_error = "Browser script did not start scan. Please reload and try again."
@@ -1159,6 +1385,7 @@ def healthz() -> Response:
 
 
 @app.route("/scan_stream", methods=["POST"])
+@require_auth
 def scan_stream() -> Response:
     workers = max(1, min(8, int(os.getenv("SCAN_WORKERS", "4"))))
     plot_days = 260
@@ -1558,6 +1785,7 @@ def scan_stream() -> Response:
 
 
 @app.route("/chart_payload", methods=["GET"])
+@require_auth
 def chart_payload() -> Response:
     symbol = str(request.args.get("symbol", "")).strip().upper()
     if not symbol:
@@ -1885,6 +2113,7 @@ def _watchlist_load_tickers() -> tuple[list[str], dict[str, dict[str, float]]]:
 
 
 @app.route("/api/watchlist")
+@require_auth
 def api_watchlist() -> Response:
     if not _WATCHLIST_POLYGON_KEY:
         return jsonify({"error": "POLYGON_API_KEY not set", "watchlist": [], "count": 0, "scanned": 0})
@@ -2078,6 +2307,7 @@ def ai_status() -> Response:
 
 
 @app.route("/api/ai/chat", methods=["POST"])
+@require_auth
 def ai_chat() -> Response:
     data = request.get_json(silent=True) or {}
     message = data.get("message", "").strip()
