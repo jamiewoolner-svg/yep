@@ -931,15 +931,6 @@
       </div>
     </div>
 
-    <!-- Waves to Ride — auto-scans on load -->
-    <div class="card" style="padding:14px;">
-      <h3 style="margin:0 0 10px;font-size:14px;">🏄 Waves to Ride</h3>
-      <p style="color:var(--muted);font-size:12px;margin:0 0 8px;">Stocks approaching Kona signal zones</p>
-      <div id="waves-list">
-        <div style="color:var(--muted);font-size:13px;">🔍 Scanning da ocean...</div>
-      </div>
-    </div>
-
     <div class="tab-bar">
       <button class="tab-btn active" data-tab="scanner" onclick="showTab('scanner')">Activity</button>
       <button class="tab-btn" data-tab="tradelog" onclick="showTab('tradelog')">Trade Ledger</button>
@@ -1892,7 +1883,6 @@
       });
     }
     renderOpenPositions();
-    scanWaves(); // Auto-scan on load
 
     function panicPosition(idx) {
       const positions = JSON.parse(localStorage.getItem('kona_open_positions') || '[]');
@@ -1901,32 +1891,6 @@
       if (!confirm('🌋 Pele\'s Wrath on ' + pos.ticker + '? This will emergency sell at market.')) return;
       // TODO: Wire to actual trading API when Kona engine is connected
       alert('Emergency sell order sent for ' + pos.ticker + '! (Demo mode — connect Kona engine for live execution)');
-    }
-
-    /* ── Waves to Ride (upcoming signals) ── */
-    async function scanWaves() {
-      const container = document.getElementById('waves-list');
-      container.innerHTML = '<div style="color:var(--muted);font-size:13px;">🔍 Scanning da ocean...</div>';
-      try {
-        const resp = await fetch('/api/waves');
-        if (!resp.ok) throw new Error('Scan failed');
-        const data = await resp.json();
-        if (!data.waves || !data.waves.length) {
-          container.innerHTML = '<div style="color:var(--muted);font-size:13px;">No waves right now — ocean stay flat 🏖️</div>';
-          return;
-        }
-        container.innerHTML = '';
-        data.waves.forEach(w => {
-          const row = document.createElement('div');
-          row.className = 'wave-row';
-          row.innerHTML = '<span class="wave-ticker">' + w.ticker + '</span>'
-            + '<span class="wave-signal">' + (w.side === 'call' ? '📈' : '📉') + ' ' + w.side.toUpperCase() + '</span>'
-            + '<span class="wave-detail">BB%: ' + (w.bb_pct || 0).toFixed(0) + '% · Stoch: ' + (w.stoch || 0).toFixed(0) + '</span>';
-          container.appendChild(row);
-        });
-      } catch(e) {
-        container.innerHTML = '<div style="color:var(--muted);font-size:13px;">Could not scan — try again later 🐢</div>';
-      }
     }
 
     /* ── Pause / Panic Controls ── */
