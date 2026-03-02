@@ -178,6 +178,236 @@
       button { width: 100%; }
       .chart-box { height: 560px; }
     }
+    /* Tabs */
+    .tab-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+    .tab-btn {
+      padding: 10px 18px;
+      border-radius: 10px;
+      background: #172838;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .tab-btn:hover { background: #1e3448; color: var(--ink); transform: none; }
+    .tab-btn.active {
+      background: linear-gradient(125deg, var(--accent), var(--accent-dark));
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    /* Watchlist */
+    .wl-subtitle { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+    .wl-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+    #wl-scan-status { color: var(--muted); font-size: 13px; font-weight: 600; }
+    .wl-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .wl-table th {
+      text-align: left;
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      border-bottom: 1px solid var(--line);
+    }
+    .wl-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(44, 63, 79, 0.4);
+    }
+    .wl-table .ticker-cell { font-weight: 700; font-size: 14px; }
+    .wl-table .call-row { background: rgba(34, 197, 94, 0.06); }
+    .wl-table .put-row { background: rgba(239, 68, 68, 0.06); }
+    .wl-table .blocked { opacity: 0.4; }
+    .wl-side-call { color: #22c55e; font-weight: 700; }
+    .wl-side-put { color: #ef4444; font-weight: 700; }
+    .wl-score { font-size: 16px; font-weight: 700; }
+    .wl-ma-bullish { color: #22c55e; }
+    .wl-ma-bearish { color: #ef4444; }
+    .wl-ma-neutral { color: var(--muted); }
+    .wl-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    @media (max-width: 700px) {
+      .wl-table { min-width: 600px; }
+    }
+    /* King Kam FAB */
+    .kam-fab {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #daa520, #b8860b);
+      border: none;
+      color: #fff;
+      font-size: 28px;
+      cursor: pointer;
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 20px rgba(218,165,32,0.4);
+      animation: kam-breathe 3s ease-in-out infinite;
+      padding: 0;
+    }
+    .kam-fab:hover { transform: scale(1.08); }
+    @keyframes kam-breathe {
+      0%, 100% { box-shadow: 0 4px 20px rgba(218,165,32,0.3); }
+      50% { box-shadow: 0 4px 30px rgba(218,165,32,0.55); }
+    }
+    .kam-fab .kam-badge {
+      position: absolute;
+      top: -2px;
+      right: -2px;
+      background: var(--danger);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+    /* King Kam Chat Panel */
+    .kam-panel {
+      position: fixed;
+      bottom: 0;
+      right: 0;
+      width: 400px;
+      height: 70vh;
+      max-height: 600px;
+      background: var(--bg);
+      border: 1px solid #b8860b;
+      border-radius: 16px 16px 0 0;
+      z-index: 300;
+      display: flex;
+      flex-direction: column;
+      transform: translateY(110%);
+      transition: transform 0.3s ease;
+      box-shadow: 0 -4px 30px rgba(0,0,0,0.5);
+    }
+    .kam-panel.open { transform: translateY(0); }
+    @media (max-width: 500px) {
+      .kam-panel { width: 100%; border-radius: 16px 16px 0 0; }
+      .kam-fab { bottom: 16px; right: 16px; width: 56px; height: 56px; font-size: 24px; }
+    }
+    .kam-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid #b8860b;
+      flex-shrink: 0;
+    }
+    .kam-header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .kam-header-left .kam-icon { font-size: 28px; }
+    .kam-name { font-weight: 700; font-size: 15px; color: #daa520; }
+    .kam-subtitle { font-size: 11px; color: var(--muted); }
+    .kam-close {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 22px;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 6px;
+    }
+    .kam-close:hover { color: var(--ink); background: rgba(255,255,255,0.05); transform: none; }
+    .kam-quick {
+      display: flex;
+      gap: 6px;
+      padding: 8px 12px;
+      overflow-x: auto;
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .kam-quick-btn {
+      padding: 5px 10px;
+      font-size: 11px;
+      background: #172838;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      border-radius: 999px;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .kam-quick-btn:hover { color: var(--ink); border-color: #daa520; background: #1e3448; transform: none; }
+    .kam-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .kam-msg {
+      max-width: 88%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.55;
+      word-wrap: break-word;
+      white-space: pre-wrap;
+    }
+    .kam-msg-user {
+      align-self: flex-end;
+      background: var(--card);
+      border: 1px solid var(--line);
+      color: var(--ink);
+    }
+    .kam-msg-ai {
+      align-self: flex-start;
+      background: #1a2210;
+      border: 1px solid rgba(218,165,32,0.25);
+      color: var(--ink);
+    }
+    .kam-input-row {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      border-top: 1px solid var(--line);
+      flex-shrink: 0;
+    }
+    .kam-input {
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #14222f;
+      color: var(--ink);
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+    }
+    .kam-input:focus { border-color: #daa520; }
+    .kam-send-btn {
+      padding: 10px 16px;
+      background: linear-gradient(135deg, #daa520, #b8860b);
+      color: #fff;
+      font-weight: 700;
+      border-radius: 10px;
+      font-size: 13px;
+      border: none;
+      cursor: pointer;
+    }
+    .kam-send-btn:hover { transform: none; opacity: 0.9; }
+    .kam-send-btn:disabled { opacity: 0.4; }
   </style>
 </head>
 <body>
@@ -190,27 +420,98 @@
       <span class="brand-tag">Find The Fat Pitch</span>
     </div>
 
-    <div class="card">
-      <h1>YEPSTOCKS</h1>
-      <p>One-button scan across S&amp;P 500 + QQQ using fixed house rules.</p>
-      <form id="scan-form" method="post">
-        <div class="actions">
-          <button type="submit" id="scan-btn">Run Scan</button>
-        </div>
-      </form>
-      <p class="status" id="scan-status"></p>
-      <div class="metrics">
-        <span id="m-tier">Tier: -</span>
-        <span id="m-scanned">Scanned: 0/0</span>
-        <span id="m-matches">Matches: 0</span>
-      </div>
-      {% if error %}<p class="err">{{ error }}</p>{% endif %}
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="showTab('scanner')">Scanner</button>
+      <button class="tab-btn" onclick="showTab('watchlist')">Watchlist</button>
     </div>
 
-    <div class="card">
-      <h2>Signals</h2>
-      <p id="empty-note">No matches yet. Run a scan.</p>
-      <div id="signal-feed" class="signal-feed"></div>
+    <div id="scanner-tab" class="tab-content active">
+      <div class="card">
+        <h1>YEPSTOCKS</h1>
+        <p>One-button scan across S&amp;P 500 + QQQ using fixed house rules.</p>
+        <form id="scan-form" method="post">
+          <div class="actions">
+            <button type="submit" id="scan-btn">Run Scan</button>
+          </div>
+        </form>
+        <p class="status" id="scan-status"></p>
+        <div class="metrics">
+          <span id="m-tier">Tier: -</span>
+          <span id="m-scanned">Scanned: 0/0</span>
+          <span id="m-matches">Matches: 0</span>
+        </div>
+        {% if error %}<p class="err">{{ error }}</p>{% endif %}
+      </div>
+
+      <div class="card">
+        <h2>Signals</h2>
+        <p id="empty-note">No matches yet. Run a scan.</p>
+        <div id="signal-feed" class="signal-feed"></div>
+      </div>
+    </div>
+
+    <div id="watchlist-tab" class="tab-content">
+      <div class="card">
+        <h2>Approaching Signals</h2>
+        <p class="wl-subtitle">Score 70+ = likely today &middot; Score 50+ = 1-2 days &middot; Score 25+ = worth watching</p>
+        <div class="wl-actions">
+          <button onclick="scanWatchlist()" id="wl-scan-btn">Scan Now</button>
+          <span id="wl-scan-status"></span>
+        </div>
+        <div class="wl-table-wrap">
+          <table class="wl-table">
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Side</th>
+                <th>Score</th>
+                <th>BB%</th>
+                <th>Stoch</th>
+                <th>MA</th>
+                <th>Spread</th>
+                <th>DTE</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="wl-body">
+              <tr><td colspan="9" style="color:var(--muted); padding:20px; text-align:center;">Click "Scan Now" to find approaching signals.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- King Kam FAB -->
+  <button class="kam-fab" id="kam-fab" onclick="toggleKam()">
+    <span>🤙</span>
+    <span class="kam-badge" id="kam-badge"></span>
+  </button>
+
+  <!-- King Kam Chat Panel -->
+  <div class="kam-panel" id="kam-panel">
+    <div class="kam-header">
+      <div class="kam-header-left">
+        <span class="kam-icon">🤙</span>
+        <div>
+          <div class="kam-name">King Kam</div>
+          <div class="kam-subtitle" id="kam-status">Loading...</div>
+        </div>
+      </div>
+      <button class="kam-close" onclick="toggleKam()">&times;</button>
+    </div>
+    <div class="kam-quick">
+      <button class="kam-quick-btn" onclick="kamQuick('What does da market look like right now?')">Market check</button>
+      <button class="kam-quick-btn" onclick="kamQuick('Explain how the Kona signal system works')">How Kona works</button>
+      <button class="kam-quick-btn" onclick="kamQuick('What should I watch for this week?')">This week</button>
+      <button class="kam-quick-btn" onclick="kamQuick('Explain BB% and Stoch for a beginner')">Teach me</button>
+    </div>
+    <div class="kam-messages" id="kam-messages">
+      <div class="kam-msg kam-msg-ai">Aloha brudda! King Kam stay ready. Ask me about da market, Kona signals, or whateva you need. Shoots! 🤙</div>
+    </div>
+    <div class="kam-input-row">
+      <input class="kam-input" id="kam-input" placeholder="Ask King Kam..." onkeydown="if(event.key==='Enter')kamSend()">
+      <button class="kam-send-btn" id="kam-send" onclick="kamSend()">Send</button>
     </div>
   </div>
 
@@ -632,6 +933,197 @@
         activeController = null;
       }
     });
+
+    /* ── King Kam chatbot ── */
+    let kamOpen = false;
+
+    function toggleKam() {
+      kamOpen = !kamOpen;
+      document.getElementById('kam-panel').classList.toggle('open', kamOpen);
+      if (kamOpen) document.getElementById('kam-input').focus();
+    }
+
+    function addKamMsg(text, role) {
+      const c = document.getElementById('kam-messages');
+      const div = document.createElement('div');
+      div.className = 'kam-msg ' + (role === 'user' ? 'kam-msg-user' : 'kam-msg-ai');
+      div.textContent = text;
+      c.appendChild(div);
+      c.scrollTop = c.scrollHeight;
+      return div;
+    }
+
+    async function kamSend() {
+      const input = document.getElementById('kam-input');
+      const msg = input.value.trim();
+      if (!msg) return;
+      input.value = '';
+      addKamMsg(msg, 'user');
+      const thinking = addKamMsg('Thinking...', 'ai');
+      document.getElementById('kam-send').disabled = true;
+      try {
+        const r = await fetch('/api/ai/chat', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({message: msg})
+        });
+        const data = await r.json();
+        thinking.remove();
+        addKamMsg(data.response || data.error || 'No response', 'ai');
+      } catch (e) {
+        thinking.remove();
+        addKamMsg('Error: ' + e.message, 'ai');
+      }
+      document.getElementById('kam-send').disabled = false;
+    }
+
+    function kamQuick(msg) {
+      document.getElementById('kam-input').value = msg;
+      kamSend();
+    }
+
+    // Check AI status on load
+    fetch('/api/ai/status').then(r => r.json()).then(data => {
+      const el = document.getElementById('kam-status');
+      if (data.enabled) {
+        el.textContent = 'Online';
+        el.style.color = '#22c55e';
+      } else if (!data.has_key) {
+        el.textContent = 'Needs API key';
+        el.style.color = '#daa520';
+      } else {
+        el.textContent = 'SDK not installed';
+        el.style.color = 'var(--danger)';
+      }
+    }).catch(() => {});
+
+    // Draggable FAB
+    (function() {
+      const fab = document.getElementById('kam-fab');
+      let dragging = false, wasDragged = false;
+      let startX, startY, fabX, fabY;
+
+      function onStart(e) {
+        const t = e.touches ? e.touches[0] : e;
+        dragging = true;
+        wasDragged = false;
+        startX = t.clientX;
+        startY = t.clientY;
+        const rect = fab.getBoundingClientRect();
+        fabX = rect.left;
+        fabY = rect.top;
+        fab.style.transition = 'none';
+      }
+
+      function onMove(e) {
+        if (!dragging) return;
+        const t = e.touches ? e.touches[0] : e;
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        if (Math.abs(dx) > 5 || Math.abs(dy) > 5) wasDragged = true;
+        if (!wasDragged) return;
+        e.preventDefault();
+        const newX = Math.max(0, Math.min(window.innerWidth - fab.offsetWidth, fabX + dx));
+        const newY = Math.max(0, Math.min(window.innerHeight - fab.offsetHeight, fabY + dy));
+        fab.style.position = 'fixed';
+        fab.style.left = newX + 'px';
+        fab.style.top = newY + 'px';
+        fab.style.right = 'auto';
+        fab.style.bottom = 'auto';
+      }
+
+      function onEnd() {
+        dragging = false;
+        fab.style.transition = '';
+      }
+
+      fab.addEventListener('mousedown', onStart);
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onEnd);
+      fab.addEventListener('touchstart', onStart, {passive: false});
+      window.addEventListener('touchmove', onMove, {passive: false});
+      window.addEventListener('touchend', onEnd);
+
+      // Override click — only toggle if not dragged
+      fab.onclick = function(e) {
+        if (wasDragged) { e.preventDefault(); e.stopPropagation(); return; }
+        toggleKam();
+      };
+    })();
+
+    /* ── Tab switching ── */
+    function showTab(name) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+      const tab = document.getElementById(name + '-tab');
+      if (tab) tab.classList.add('active');
+      const btns = document.querySelectorAll('.tab-btn');
+      btns.forEach(b => { if (b.textContent.toLowerCase().includes(name.toLowerCase().replace('watchlist','watchlist').replace('scanner','scanner'))) b.classList.add('active'); });
+      // Simpler: match by tab name
+      btns.forEach(b => {
+        const label = b.textContent.trim().toLowerCase();
+        if ((name === 'scanner' && label === 'scanner') || (name === 'watchlist' && label === 'watchlist')) {
+          b.classList.add('active');
+        }
+      });
+    }
+
+    /* ── Watchlist scanner ── */
+    function scanWatchlist() {
+      const btn = document.getElementById('wl-scan-btn');
+      const statusEl = document.getElementById('wl-scan-status');
+      const tbody = document.getElementById('wl-body');
+
+      btn.disabled = true;
+      statusEl.textContent = 'Scanning universe...';
+      tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted); padding:20px; text-align:center;">Loading...</td></tr>';
+
+      fetch('/api/watchlist')
+        .then(r => r.json())
+        .then(data => {
+          btn.disabled = false;
+
+          if (data.error) {
+            statusEl.textContent = 'Error: ' + data.error;
+            tbody.innerHTML = '<tr><td colspan="9" style="color:var(--danger); padding:20px;">' + data.error + '</td></tr>';
+            return;
+          }
+
+          statusEl.textContent = data.count + ' signals from ' + data.scanned + ' tickers';
+          tbody.innerHTML = '';
+
+          if (data.watchlist.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted); padding:20px; text-align:center;">No approaching signals found.</td></tr>';
+            return;
+          }
+
+          data.watchlist.forEach(item => {
+            const row = document.createElement('tr');
+            const isBlocked = item.status !== '\u2713';
+            row.className = (item.side === 'call' ? 'call-row' : 'put-row') + (isBlocked ? ' blocked' : '');
+
+            const sideClass = item.side === 'call' ? 'wl-side-call' : 'wl-side-put';
+            const maClass = item.ma_state === 'bullish' ? 'wl-ma-bullish' : item.ma_state === 'bearish' ? 'wl-ma-bearish' : 'wl-ma-neutral';
+
+            row.innerHTML =
+              '<td class="ticker-cell">' + item.ticker + '</td>' +
+              '<td class="' + sideClass + '">' + item.side.toUpperCase() + '</td>' +
+              '<td class="wl-score">' + item.score.toFixed(0) + '</td>' +
+              '<td>' + (item.bb_pct * 100).toFixed(0) + '%</td>' +
+              '<td>' + item.stoch_k.toFixed(0) + '</td>' +
+              '<td class="' + maClass + '">' + item.ma_state + '</td>' +
+              '<td>' + (item.spread != null ? (item.spread * 100).toFixed(1) + '%' : '-') + '</td>' +
+              '<td>' + (item.dte != null ? item.dte : '-') + '</td>' +
+              '<td title="' + (item.status_reason || '') + '">' + item.status + '</td>';
+
+            tbody.appendChild(row);
+          });
+        })
+        .catch(err => {
+          btn.disabled = false;
+          statusEl.textContent = 'Error: ' + err;
+        });
+    }
 
   </script>
 </body>
