@@ -72,48 +72,44 @@
     .wrap { max-width: 1240px; margin: 28px auto; padding: 0 16px 24px; }
     .brand {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: space-between;
       gap: 14px;
       margin-bottom: 12px;
+    }
+    .brand-left {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
     .brand-mark {
       display: inline-flex;
       align-items: center;
       gap: 10px;
     }
-    .brand-dot {
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-      background: radial-gradient(circle at 30% 30%, #f0c864, #dc8c28 60%, #b87020);
-      box-shadow: 0 0 0 4px rgba(240, 200, 100, 0.12);
-    }
-    .brand-logo { height: 36px; margin-right: 8px; filter: drop-shadow(0 0 8px rgba(218,165,32,0.3)); border: none; }
+    .brand-logo { height: 60px; filter: drop-shadow(0 0 12px rgba(218,165,32,0.35)); border: none; }
     .brand-name {
-      font-size: 14px;
+      font-size: 18px;
       letter-spacing: 0.14em;
       text-transform: uppercase;
       color: var(--gold);
       font-weight: 700;
     }
-    .brand-pnl {
+    .brand-pnl-row {
       display: flex;
       align-items: center;
-      gap: 8px;
-      flex: 1;
-      justify-content: center;
+      gap: 10px;
     }
     .header-pnl {
-      font-size: 20px;
+      font-size: 22px;
       font-weight: 700;
       color: var(--gold);
     }
     .header-pnl.pos { color: #4ade80; }
     .header-pnl.neg { color: #f87171; }
     .header-sparkline {
-      width: 100px;
-      height: 32px;
+      width: 120px;
+      height: 36px;
     }
     .brand-logout {
       font-size: 11px; color: var(--muted); cursor: pointer; text-decoration: none;
@@ -858,13 +854,15 @@
   <div id="app-content">
   <div class="wrap">
     <div class="brand">
-      <div class="brand-mark">
-        <img src="/bi-logo.png" alt="" class="brand-logo">
-        <span class="brand-name">Big Island</span>
-      </div>
-      <div class="brand-pnl">
-        <span id="header-pnl" class="header-pnl">$0</span>
-        <div id="header-sparkline" class="header-sparkline"></div>
+      <div class="brand-left">
+        <div class="brand-mark">
+          <img src="/bi-logo.png" alt="" class="brand-logo">
+          <span class="brand-name">Big Island</span>
+        </div>
+        <div class="brand-pnl-row">
+          <span id="header-pnl" class="header-pnl">$0</span>
+          <div id="header-sparkline" class="header-sparkline"></div>
+        </div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;">
         <a class="brand-logout" id="enroll-face-btn" onclick="enrollFaceId()" style="display:none;">🔐 Face ID</a>
@@ -906,15 +904,6 @@
         </div>
       </div>
 
-      <!-- Lifetime P&L Chart -->
-      <div class="card" style="padding:12px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-          <h3 style="margin:0;font-size:14px;">Lifetime P&L</h3>
-          <button class="pnl-btn" onclick="pnlPromptAdd()">+ Log Trade</button>
-        </div>
-        <div id="pnl-chart" style="width:100%;height:160px;"></div>
-      </div>
-
       <!-- Open Positions -->
       <div class="card" style="padding:14px;">
         <h3 style="margin:0 0 10px;font-size:14px;">🌊 Open Positions</h3>
@@ -923,25 +912,22 @@
         </div>
       </div>
 
-      <!-- Waves to Ride — upcoming signals -->
+      <!-- Waves to Ride — auto-scans on load -->
       <div class="card" style="padding:14px;">
         <h3 style="margin:0 0 10px;font-size:14px;">🏄 Waves to Ride</h3>
         <p style="color:var(--muted);font-size:12px;margin:0 0 8px;">Stocks approaching Kona signal zones</p>
         <div id="waves-list">
-          <div style="color:var(--muted);font-size:13px;">Scanning for waves...</div>
+          <div style="color:var(--muted);font-size:13px;">🔍 Scanning da ocean...</div>
         </div>
-        <button class="pnl-btn pnl-btn-muted" style="margin-top:10px;width:100%;" onclick="scanWaves()">🔍 Scan for Waves</button>
       </div>
     </div>
 
     <!-- ── Trade Log Tab ── -->
     <div id="tradelog-tab" class="tab-content">
       <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-          <h2 style="margin:0;">📖 Trade Log</h2>
-          <button class="pnl-btn" onclick="pnlPromptAdd()">+ Log Trade</button>
-        </div>
-        <div id="tradelog-list" class="pnl-recent"></div>
+        <h2 style="margin:0 0 4px;">📖 Trade Log</h2>
+        <p style="color:var(--muted);font-size:12px;margin:0 0 12px;">Complete ledger of all trades processed</p>
+        <div id="tradelog-list"></div>
       </div>
     </div>
 
@@ -1729,8 +1715,6 @@
         headerPnl.textContent = (total >= 0 ? '+$' : '-$') + Math.abs(total).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
         headerPnl.className = 'header-pnl ' + (total > 0 ? 'pos' : total < 0 ? 'neg' : '');
       }
-      // Draw lifetime chart (always visible)
-      pnlDrawChart(trades);
       // Draw header sparkline
       pnlDrawSparkline(trades);
       // Update trade log tab
@@ -1739,51 +1723,29 @@
       renderDashCards();
     }
 
-    function pnlDrawChart(trades) {
-      if (trades.length < 2) {
-        const el = document.getElementById('pnl-chart');
-        if (el) el.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px 0;">Log trades to see your P&L chart</div>';
-        return;
-      }
-      let cum = 0;
-      const dates = [], vals = [];
-      trades.forEach(t => { cum += t.amt; dates.push(t.date); vals.push(cum); });
-      const endColor = vals[vals.length-1] >= 0 ? '#4ade80' : '#f87171';
-      Plotly.newPlot('pnl-chart', [{
-        x: dates, y: vals, type: 'scatter', mode: 'lines+markers',
-        line: { color: endColor, width: 2 },
-        marker: { size: 5, color: vals.map(v => v >= 0 ? '#4ade80' : '#f87171') },
-        fill: 'tozeroy',
-        fillcolor: vals[vals.length-1] >= 0 ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)',
-      }], {
-        paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
-        margin: { t: 5, b: 30, l: 50, r: 10 },
-        xaxis: { color: '#a08050', gridcolor: '#3d2818', tickfont: { size: 10 } },
-        yaxis: { color: '#a08050', gridcolor: '#3d2818', tickprefix: '$', tickfont: { size: 10 },
-                 zeroline: true, zerolinecolor: '#3d5c74', zerolinewidth: 1 },
-        font: { family: 'inherit', color: '#a08050' },
-      }, { displayModeBar: false, responsive: true });
-    }
-
     function renderTradeLog() {
       const trades = pnlLoad();
       const container = document.getElementById('tradelog-list');
       if (!container) return;
       container.innerHTML = '';
       if (!trades.length) {
-        container.innerHTML = '<div style="color:var(--muted);font-size:13px;">No trades logged yet</div>';
+        container.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:20px 0;text-align:center;">No trades recorded yet</div>';
         return;
       }
-      trades.slice().reverse().forEach((t, i) => {
-        const idx = trades.length - 1 - i;
+      // Table header
+      container.innerHTML = '<div class="pnl-trade-row" style="border-bottom:2px solid var(--line);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;">'
+        + '<span class="pnl-trade-ticker">Ticker</span>'
+        + '<span class="pnl-trade-date">Date / Side</span>'
+        + '<span class="pnl-trade-amt">P&L</span></div>';
+      // All trades, newest first
+      trades.slice().reverse().forEach(t => {
         const row = document.createElement('div');
         row.className = 'pnl-trade-row';
         const amtClass = t.amt >= 0 ? 'pos' : 'neg';
         const amtStr = (t.amt >= 0 ? '+$' : '-$') + Math.abs(t.amt).toFixed(2);
         row.innerHTML = '<span class="pnl-trade-ticker">' + (t.ticker || '') + '</span>'
           + '<span class="pnl-trade-date">' + (t.date || '') + ' · ' + (t.side || '') + '</span>'
-          + '<span class="pnl-trade-amt ' + amtClass + '">' + amtStr + '</span>'
-          + '<span class="pnl-trade-del" onclick="pnlDelete(' + idx + ')">×</span>';
+          + '<span class="pnl-trade-amt ' + amtClass + '">' + amtStr + '</span>';
         container.appendChild(row);
       });
     }
@@ -1881,6 +1843,7 @@
       });
     }
     renderOpenPositions();
+    scanWaves(); // Auto-scan on load
 
     function panicPosition(idx) {
       const positions = JSON.parse(localStorage.getItem('kona_open_positions') || '[]');
