@@ -3,6 +3,7 @@ scan_report.html
 test.html
 docs/pows/*.pdf
 docs/pows/transcripts/
-.env
-scan_report.html
-test.html
+kona_state.json
+kona_controls.json
+earnings_cache.json
+earnings.log

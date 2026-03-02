@@ -1,0 +1,3 @@
+# Kona v56 - Scheduled Tasks
+# Refresh earnings cache daily at 6am ET
+0 6 * * * cd /home/ec2-user/kona_aws && /usr/bin/python3 kailua_kona.py --refresh-earnings >> /home/ec2-user/kona_aws/earnings.log 2>&1

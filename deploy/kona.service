@@ -1,0 +1,15 @@
+[Unit]
+Description=Kona v56 Options Trading Engine
+After=network.target
+
+[Service]
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/kona_aws
+EnvironmentFile=/home/ec2-user/kona_aws/.env
+ExecStart=/usr/local/bin/gunicorn app:app --bind 127.0.0.1:8000 --workers 1 --threads 4 --timeout 300
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

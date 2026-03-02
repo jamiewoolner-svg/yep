@@ -17,7 +17,7 @@ from html import unescape
 from types import SimpleNamespace
 from typing import Any
 
-from flask import Flask, Response, render_template, render_template_string, request, stream_with_context
+from flask import Flask, Response, jsonify, render_template, render_template_string, request, stream_with_context
 
 from stock_scanner import (
     Candle,
@@ -1681,6 +1681,417 @@ th,td{border:1px solid #ddd;padding:6px;font-size:13px;text-align:right} th:firs
         workers=workers,
         top=top,
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WATCHLIST SCANNER (Kona P55/P56)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_WATCHLIST_POLYGON_KEY = os.environ.get("POLYGON_API_KEY", "")
+
+_WATCHLIST_CACHE: dict[str, tuple[float, Any]] = {}
+_WATCHLIST_CACHE_LOCK = threading.Lock()
+_WATCHLIST_CACHE_TTL = int(os.getenv("WATCHLIST_CACHE_TTL_SEC", "300"))
+
+
+def _watchlist_polygon_bars(ticker: str, days: int = 60) -> list[dict]:
+    end = datetime.now().strftime("%Y-%m-%d")
+    start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    url = (
+        f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/1/day/"
+        f"{start}/{end}?adjusted=true&sort=asc&apiKey={_WATCHLIST_POLYGON_KEY}"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "Kona/1.0"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read())
+    if data.get("status") != "OK" or "results" not in data:
+        return []
+    return [
+        {"o": r["o"], "h": r["h"], "l": r["l"], "c": r["c"], "v": r.get("v", 0)}
+        for r in data["results"]
+    ]
+
+
+def _watchlist_indicators(bars: list[dict]) -> dict | None:
+    if len(bars) < 50:
+        return None
+    closes = [b["c"] for b in bars]
+    highs = [b["h"] for b in bars]
+    lows = [b["l"] for b in bars]
+
+    sma20 = sum(closes[-20:]) / 20
+    sma50 = sum(closes[-50:]) / 50
+
+    bb_std = (sum((c - sma20) ** 2 for c in closes[-20:]) / 20) ** 0.5
+    bb_upper = sma20 + 2 * bb_std
+    bb_lower = sma20 - 2 * bb_std
+    bb_pct = (closes[-1] - bb_lower) / (bb_upper - bb_lower) if bb_upper != bb_lower else 0.5
+
+    low_14 = min(lows[-14:])
+    high_14 = max(highs[-14:])
+    stoch_k = (closes[-1] - low_14) / (high_14 - low_14) * 100 if high_14 != low_14 else 50
+
+    gains, losses = [], []
+    for i in range(1, 15):
+        chg = closes[-i] - closes[-i - 1]
+        if chg > 0:
+            gains.append(chg)
+        else:
+            losses.append(abs(chg))
+    avg_gain = sum(gains) / 14 if gains else 0.001
+    avg_loss = sum(losses) / 14 if losses else 0.001
+    rsi = 100 - (100 / (1 + avg_gain / avg_loss))
+
+    ret_5d = (closes[-1] - closes[-6]) / closes[-6] * 100 if len(closes) >= 6 else 0
+    dist_sma50 = (closes[-1] - sma50) / sma50 * 100 if sma50 > 0 else 0
+
+    ma2 = (closes[-1] + closes[-2]) / 2
+    ma3 = (closes[-1] + closes[-2] + closes[-3]) / 3
+    if ma2 > ma3:
+        ma_state = "bullish"
+    elif ma2 < ma3:
+        ma_state = "bearish"
+    else:
+        ma_state = "neutral"
+
+    return {
+        "bb_pct": bb_pct,
+        "stoch_k": stoch_k,
+        "rsi": rsi,
+        "ret_5d": ret_5d,
+        "dist_sma50": dist_sma50,
+        "ma_state": ma_state,
+        "close": closes[-1],
+    }
+
+
+def _watchlist_earnings() -> dict[str, list[str]]:
+    from collections import defaultdict
+    import csv
+
+    earnings: dict[str, list[str]] = defaultdict(list)
+    for fname in ("top_300_earnings_calendar.csv", "data/top_300_earnings_calendar.csv"):
+        try:
+            with open(fname) as f:
+                for row in csv.DictReader(f):
+                    ticker = row.get("ticker", "")
+                    date_str = row.get("calendar_date", "")
+                    if ticker and date_str:
+                        earnings[ticker].append(date_str)
+            return dict(earnings)
+        except FileNotFoundError:
+            continue
+    return {}
+
+
+def _watchlist_dte(ticker: str, earnings: dict, today_str: str) -> int | None:
+    if ticker not in earnings:
+        return None
+    today_dt = datetime.strptime(today_str, "%Y-%m-%d")
+    min_days = None
+    for ds in earnings[ticker]:
+        try:
+            earn_dt = datetime.strptime(ds, "%Y-%m-%d")
+            days = (earn_dt - today_dt).days
+            if days >= 0 and (min_days is None or days < min_days):
+                min_days = days
+        except Exception:
+            pass
+    return min_days
+
+
+def _watchlist_status(ind: dict, side: str, month: int, dte: int | None) -> tuple[str, str]:
+    if dte is not None and dte <= 21:
+        return "\u26a0\ufe0f", f"Earnings in {dte}d"
+    if side == "put":
+        if month in (5, 7):
+            return "\u26a0\ufe0f", "Puts skip May/Jul"
+        if ind["ret_5d"] > 5:
+            return "\u26a0\ufe0f", f"ret_5d {ind['ret_5d']:.1f}%"
+        if ind["dist_sma50"] > 5:
+            return "\u26a0\ufe0f", f"dist_sma50 {ind['dist_sma50']:.1f}%"
+        if ind["rsi"] > 65:
+            return "\u26a0\ufe0f", f"RSI {ind['rsi']:.0f}"
+    return "\u2713", "Ready"
+
+
+def _watchlist_score(bb_pct: float, stoch_k: float, ma_state: str, side: str) -> float:
+    score = 0.0
+    if side == "call":
+        if bb_pct < 0.15:
+            score += (0.15 - bb_pct) / 0.15 * 40
+        if stoch_k < 40:
+            score += (40 - stoch_k) / 40 * 40
+        if ma_state == "bullish":
+            score += 20
+    else:
+        if bb_pct > 0.85:
+            score += (bb_pct - 0.85) / 0.15 * 40
+        if stoch_k > 60:
+            score += (stoch_k - 60) / 40 * 40
+        if ma_state == "bearish":
+            score += 20
+    return min(100, score)
+
+
+def _watchlist_spreads() -> dict[str, dict[str, float]]:
+    import csv
+
+    spreads: dict[str, dict[str, float]] = {}
+    for fname in (
+        "top_300_options_liquidity_companies_polygon.csv",
+        "data/top_300_options_liquidity_companies_polygon.csv",
+    ):
+        try:
+            with open(fname) as f:
+                for row in csv.DictReader(f):
+                    ticker = row.get("ticker", "")
+                    if not ticker:
+                        continue
+                    try:
+                        call_bid = float(row.get("itm_monthly_call_bid") or 0)
+                        call_ask = float(row.get("itm_monthly_call_ask") or 0)
+                        put_bid = float(row.get("itm_monthly_put_bid") or 0)
+                        put_ask = float(row.get("itm_monthly_put_ask") or 0)
+                        call_mid = (call_bid + call_ask) / 2
+                        put_mid = (put_bid + put_ask) / 2
+                        spreads[ticker] = {
+                            "call": (call_ask - call_bid) / call_mid if call_mid > 0 else 1.0,
+                            "put": (put_ask - put_bid) / put_mid if put_mid > 0 else 1.0,
+                        }
+                    except (ValueError, ZeroDivisionError):
+                        pass
+            return spreads
+        except FileNotFoundError:
+            continue
+    return {}
+
+
+def _watchlist_load_tickers() -> tuple[list[str], dict[str, dict[str, float]]]:
+    """Load tickers + spreads. Falls back to S&P 500 if CSV missing."""
+    spreads = _watchlist_spreads()
+    if spreads:
+        tickers = [t for t, s in spreads.items() if s["call"] < 0.10 or s["put"] < 0.10]
+        return tickers, spreads
+
+    # Fallback: use S&P 500 tickers (live data, no spread filter)
+    try:
+        sp500 = fetch_sp500_symbols()
+        return sp500, {}
+    except Exception:
+        pass
+
+    return [], {}
+
+
+@app.route("/api/watchlist")
+def api_watchlist() -> Response:
+    if not _WATCHLIST_POLYGON_KEY:
+        return jsonify({"error": "POLYGON_API_KEY not set", "watchlist": [], "count": 0, "scanned": 0})
+
+    # Check cache
+    now = time.time()
+    with _WATCHLIST_CACHE_LOCK:
+        cached = _WATCHLIST_CACHE.get("watchlist")
+        if cached and now - cached[0] < _WATCHLIST_CACHE_TTL:
+            return jsonify(cached[1])
+
+    tickers, spreads = _watchlist_load_tickers()
+    has_spreads = bool(spreads)
+    earnings = _watchlist_earnings()
+    today = datetime.now().strftime("%Y-%m-%d")
+    current_month = datetime.now().month
+
+    watchlist: list[dict] = []
+
+    for ticker in tickers:
+        try:
+            bars = _watchlist_polygon_bars(ticker)
+            if not bars:
+                continue
+            ind = _watchlist_indicators(bars)
+            if not ind:
+                continue
+
+            dte = _watchlist_dte(ticker, earnings, today)
+            call_spread = spreads.get(ticker, {}).get("call", 0) if has_spreads else None
+            put_spread = spreads.get(ticker, {}).get("put", 0) if has_spreads else None
+
+            # Check CALL
+            if not has_spreads or (call_spread is not None and call_spread < 0.10):
+                if ind["bb_pct"] < 0.15 and ind["stoch_k"] < 40:
+                    status_icon, reason = _watchlist_status(ind, "call", current_month, dte)
+                    watchlist.append(
+                        {
+                            "ticker": ticker,
+                            "side": "call",
+                            "score": _watchlist_score(ind["bb_pct"], ind["stoch_k"], ind["ma_state"], "call"),
+                            "bb_pct": ind["bb_pct"],
+                            "stoch_k": ind["stoch_k"],
+                            "rsi": ind["rsi"],
+                            "ma_state": ind["ma_state"],
+                            "spread": call_spread,
+                            "dte": dte,
+                            "status": status_icon,
+                            "status_reason": reason,
+                        }
+                    )
+
+            # Check PUT
+            if not has_spreads or (put_spread is not None and put_spread < 0.10):
+                if ind["bb_pct"] > 0.85 and ind["stoch_k"] > 60:
+                    status_icon, reason = _watchlist_status(ind, "put", current_month, dte)
+                    watchlist.append(
+                        {
+                            "ticker": ticker,
+                            "side": "put",
+                            "score": _watchlist_score(ind["bb_pct"], ind["stoch_k"], ind["ma_state"], "put"),
+                            "bb_pct": ind["bb_pct"],
+                            "stoch_k": ind["stoch_k"],
+                            "rsi": ind["rsi"],
+                            "ret_5d": ind["ret_5d"],
+                            "dist_sma50": ind["dist_sma50"],
+                            "ma_state": ind["ma_state"],
+                            "spread": put_spread,
+                            "dte": dte,
+                            "status": status_icon,
+                            "status_reason": reason,
+                        }
+                    )
+
+            time.sleep(0.12)  # Rate limit
+
+        except Exception:
+            continue
+
+    watchlist.sort(key=lambda x: -x["score"])
+
+    result = {
+        "watchlist": watchlist,
+        "count": len(watchlist),
+        "scanned": len(tickers),
+        "updated": datetime.now().isoformat(),
+    }
+
+    with _WATCHLIST_CACHE_LOCK:
+        _WATCHLIST_CACHE["watchlist"] = (time.time(), result)
+
+    return jsonify(result)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# KING KAM — AI Trading Consultant (Hawaiian Pidgin)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+AI_MODEL = os.environ.get("KONA_AI_MODEL", "claude-sonnet-4-6")
+
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+
+_ai_chat_history: list[dict[str, str]] = []
+
+KONA_SYSTEM_PROMPT = """You are King Kam (King Kamehameha), the AI assistant built into the Kona options trading webapp.
+You help the user understand their trades, the market, and historical context.
+
+You speak in Hawaiian Pidgin — the local creole of Hawaii. You're like a wise uncle who spent
+40 years trading and knows every market crash since 1920.
+
+PIDGIN GUIDE (use naturally, don't force every one into every response):
+- brah = friend/dude: "Eh brah, market stay choppy"
+- stay = is/are: "VIX stay elevated"
+- wen = past tense: "I wen check da charts"
+- da = the: "da market"
+- pau = done/finished: "Bull run stay pau"
+- lolo = crazy/dumb
+- hamajang = messed up/broken
+- bumbye = later/eventually
+- shoots = ok/sounds good
+
+PERSONALITY:
+- You are a Hawaiian king — confident, protective of your people's money, wise
+- Winning trade: "Broke da mouth, brah!"
+- Losing trade: "Bummahs, dat call wen go south..."
+- Uncertainty: "Brah, I not gon lie — right now stay murky..."
+- Historical: "Eh, you know wat dis remind me of? October 1973..."
+
+WHAT YOU HELP WITH:
+1. Trade analysis — "Why did dis trade work/fail?"
+2. Market context — "What's da market look like historically?"
+3. Strategy questions — "Should I be more aggressive right now?"
+4. The Kona system — BB%, Stoch, MA cross, P55/P56 filters
+5. Emotional support — "I just took a big loss"
+
+RULES:
+1. Never give specific buy/sell advice — provide context, user makes decisions
+2. Always acknowledge uncertainty — history rhymes, no repeat exactly
+3. Keep it real — if setup looks bad, say so (with aloha)
+4. Keep responses concise — 2-4 paragraphs max unless asked for detail
+
+KONA STRATEGY OVERVIEW:
+The system exploits mean-reversion using Bollinger Bands and Stochastic RSI.
+- CALL signal: BB% lifts off lower band (< 5%) + Stoch oversold (< 30) + BB width gate
+- PUT signal: BB% drops from upper band (> 95%) + Stoch overbought (> 70) + BB width gate
+- P55 filters: 2/3 MA cross confirmation, earnings DTE > 21, skip puts in May/Jul
+- P56 strict put filters: ret_5d < 5%, dist_sma50 < 5%, RSI < 65
+"""
+
+
+def _ai_chat(user_message: str) -> str:
+    """Send a message to Claude with context."""
+    if not HAS_ANTHROPIC or not ANTHROPIC_API_KEY:
+        return "Set ANTHROPIC_API_KEY environment variable to enable King Kam."
+
+    global _ai_chat_history
+
+    _ai_chat_history.append({"role": "user", "content": user_message})
+
+    # Keep history manageable
+    if len(_ai_chat_history) > 20:
+        _ai_chat_history = _ai_chat_history[:1] + _ai_chat_history[-19:]
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=AI_MODEL,
+            max_tokens=2000,
+            system=KONA_SYSTEM_PROMPT,
+            messages=_ai_chat_history,
+        )
+        reply = response.content[0].text
+        _ai_chat_history.append({"role": "assistant", "content": reply})
+        return reply
+    except Exception as ex:
+        return f"AI error: {ex}"
+
+
+@app.route("/api/ai/status")
+def ai_status() -> Response:
+    return jsonify({
+        "enabled": HAS_ANTHROPIC and bool(ANTHROPIC_API_KEY),
+        "has_sdk": HAS_ANTHROPIC,
+        "has_key": bool(ANTHROPIC_API_KEY),
+    })
+
+
+@app.route("/api/ai/chat", methods=["POST"])
+def ai_chat() -> Response:
+    data = request.get_json(silent=True) or {}
+    message = data.get("message", "").strip()
+    if not message:
+        return jsonify({"error": "No message"}), 400
+    reply = _ai_chat(message)
+    return jsonify({"response": reply})
+
+
+@app.route("/api/ai/reset", methods=["POST"])
+def ai_reset() -> Response:
+    global _ai_chat_history
+    _ai_chat_history = []
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
