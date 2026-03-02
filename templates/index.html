@@ -521,6 +521,7 @@
         <span class="brand-name">Big Island</span>
       </div>
       <span class="brand-tag">🌺 Kona v56</span>
+      <a class="brand-logout" id="enroll-face-btn" onclick="enrollFaceId()" style="display:none;">🔐 Setup Face ID</a>
       <a class="brand-logout" onclick="doLogout()">Logout</a>
     </div>
 
@@ -1499,9 +1500,59 @@
       }
     }
 
-    function showApp() {
+    async function showApp() {
       document.getElementById('login-screen').style.display = 'none';
       document.getElementById('app-content').style.display = '';
+      // Show "Setup Face ID" button if no passkeys enrolled yet
+      try {
+        const r = await fetch('/api/auth/check');
+        const d = await r.json();
+        const btn = document.getElementById('enroll-face-btn');
+        if (btn) btn.style.display = d.has_passkeys ? 'none' : '';
+      } catch(e) {}
+    }
+
+    async function enrollFaceId() {
+      const btn = document.getElementById('enroll-face-btn');
+      try {
+        btn.textContent = 'Setting up...';
+        btn.style.pointerEvents = 'none';
+
+        // Get registration options from server
+        const optRes = await fetch('/api/auth/webauthn/register-options', { method: 'POST' });
+        const opts = await optRes.json();
+        if (opts.error) { alert(opts.error); return; }
+
+        // Convert challenge and user.id from base64url
+        opts.challenge = Uint8Array.from(atob(opts.challenge.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0));
+        opts.user.id = Uint8Array.from(atob(opts.user.id.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0));
+
+        // Create credential (triggers Face ID / Touch ID / Windows Hello)
+        const cred = await navigator.credentials.create({ publicKey: opts });
+
+        // Send credential to server
+        const regRes = await fetch('/api/auth/webauthn/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: cred.id,
+            rawId: btoa(String.fromCharCode(...new Uint8Array(cred.rawId))),
+            type: cred.type,
+          })
+        });
+        const result = await regRes.json();
+        if (result.ok) {
+          btn.textContent = '✅ Face ID Enrolled!';
+          setTimeout(() => { btn.style.display = 'none'; }, 2000);
+        } else {
+          alert(result.error || 'Registration failed');
+        }
+      } catch(e) {
+        alert('Face ID setup failed: ' + (e.message || e));
+      } finally {
+        btn.style.pointerEvents = '';
+        if (btn.textContent === 'Setting up...') btn.textContent = '🔐 Setup Face ID';
+      }
     }
 
     async function doLogout() {
