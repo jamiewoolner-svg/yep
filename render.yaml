@@ -2,11 +2,11 @@ services:
   - type: web
     name: yep
     runtime: python
-    pythonVersion: 3.14.3
+    pythonVersion: 3.11.12
     plan: starter
     region: oregon
     buildCommand: pip install -r requirements-web.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300
+    startCommand: gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
