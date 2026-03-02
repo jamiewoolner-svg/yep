@@ -2229,6 +2229,15 @@ except ImportError:
 
 _ai_chat_history: list[dict[str, str]] = []
 
+# ── Try to initialize KonaAI consultant (reads state files for richer context) ──
+_kona_ai = None
+try:
+    from kona_ai_consultant import KonaAI
+    _kona_ai = KonaAI(data_dir=_DATA_DIR)
+    _kona_ai.start_monitor()
+except Exception:
+    pass  # Graceful fallback — simple chat still works
+
 KONA_SYSTEM_PROMPT = """You are King Kam (King Kamehameha), the AI assistant built into the Kona options trading webapp.
 You help the user understand their trades, the market, and historical context.
 
@@ -2277,6 +2286,13 @@ The system exploits mean-reversion using Bollinger Bands and Stochastic RSI.
 
 def _ai_chat(user_message: str) -> str:
     """Send a message to Claude with context."""
+    # Use KonaAI consultant if available (provides trading state context)
+    if _kona_ai:
+        try:
+            return _kona_ai.chat(user_message)
+        except Exception:
+            pass  # Fall through to simple chat
+
     if not HAS_ANTHROPIC or not ANTHROPIC_API_KEY:
         return "Set ANTHROPIC_API_KEY environment variable to enable King Kam."
 
@@ -2327,7 +2343,55 @@ def ai_chat() -> Response:
 def ai_reset() -> Response:
     global _ai_chat_history
     _ai_chat_history = []
+    if _kona_ai:
+        _kona_ai.reset_chat()
     return jsonify({"ok": True})
+
+
+@app.route("/api/ai/alerts")
+@require_auth
+def ai_alerts() -> Response:
+    if _kona_ai:
+        return jsonify({
+            'alerts': _kona_ai.get_alerts(20),
+            'unread': _kona_ai.get_alert_count(),
+        })
+    return jsonify({'alerts': [], 'unread': 0})
+
+
+@app.route("/api/ai/actions")
+@require_auth
+def ai_actions() -> Response:
+    if _kona_ai:
+        return jsonify({'pending': _kona_ai.get_pending_actions()})
+    return jsonify({'pending': []})
+
+
+@app.route("/api/ai/actions/<action_id>/approve", methods=["POST"])
+@require_auth
+def ai_approve(action_id: str) -> Response:
+    if _kona_ai:
+        success = _kona_ai.approve_action(action_id)
+        return jsonify({'success': success})
+    return jsonify({'success': False, 'error': 'AI not available'}), 503
+
+
+@app.route("/api/ai/actions/<action_id>/reject", methods=["POST"])
+@require_auth
+def ai_reject(action_id: str) -> Response:
+    if _kona_ai:
+        success = _kona_ai.reject_action(action_id)
+        return jsonify({'success': success})
+    return jsonify({'success': False, 'error': 'AI not available'}), 503
+
+
+@app.route("/api/ai/report")
+@require_auth
+def ai_report() -> Response:
+    if _kona_ai:
+        report = _kona_ai.quick_analysis()
+        return jsonify({'report': report})
+    return jsonify({'report': 'AI consultant not available — state files not found.'})
 
 
 # ── Scanner Controls ──────────────────────────────────────────
