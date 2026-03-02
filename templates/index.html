@@ -613,6 +613,27 @@
       padding: 0;
       margin: 0;
     }
+    /* Waves to Ride — wide card */
+    .waves-card {
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .wave-row {
+      display: grid;
+      grid-template-columns: 70px 80px 1fr 1fr;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 14px;
+      gap: 8px;
+    }
+    .wave-row:last-child { border-bottom: none; }
+    .wave-ticker { font-weight: 700; font-size: 15px; }
+    .wave-signal { font-weight: 600; }
+    .wave-signal.call { color: #4ade80; }
+    .wave-signal.put { color: #f87171; }
+    .wave-detail { color: var(--muted); font-size: 12px; }
+    .wave-price { color: var(--ink); font-size: 13px; text-align: right; }
     /* Open positions */
     .open-pos-row {
       display: flex;
@@ -931,15 +952,23 @@
       </div>
     </div>
 
+    <!-- 🏄 Waves to Ride — full width signal scanner -->
+    <div class="card waves-card">
+      <h3 style="margin:0 0 4px;font-size:16px;">🏄 Waves to Ride</h3>
+      <p style="color:var(--muted);font-size:12px;margin:0 0 12px;">Stocks approaching Kona signal zones</p>
+      <div id="waves-list">
+        <div style="color:var(--muted);font-size:13px;">🔍 Scanning da ocean...</div>
+      </div>
+    </div>
+
     <div class="tab-bar">
-      <button class="tab-btn active" data-tab="scanner" onclick="showTab('scanner')">Activity</button>
-      <button class="tab-btn" data-tab="tradelog" onclick="showTab('tradelog')">Trade Ledger</button>
+      <button class="tab-btn active" data-tab="tradelog" onclick="showTab('tradelog')">Trade Ledger</button>
       <button class="tab-btn" data-tab="watchlist" onclick="showTab('watchlist')">Watchlist</button>
       <button class="tab-btn" data-tab="journal" onclick="showTab('journal')">Journal</button>
     </div>
 
     <!-- ── Trade Ledger Tab ── -->
-    <div id="tradelog-tab" class="tab-content">
+    <div id="tradelog-tab" class="tab-content active">
       <div class="card" style="padding:14px;overflow-x:auto;">
         <h2 style="margin:0 0 4px;">📖 Trade Ledger</h2>
         <p style="color:var(--muted);font-size:12px;margin:0 0 12px;">Complete record of all trades</p>
@@ -959,31 +988,6 @@
           <tbody id="tradelog-body"></tbody>
         </table>
         <div id="tradelog-empty" style="color:var(--muted);font-size:13px;padding:20px 0;text-align:center;display:none;">No trades recorded yet</div>
-      </div>
-    </div>
-
-    <div id="scanner-tab" class="tab-content active">
-      <div class="card">
-        <h1>🌋 Kona Activity</h1>
-        <p>Live scan across S&amp;P 500 + QQQ — Kona v56 options signals.</p>
-        <form id="scan-form" method="post">
-          <div class="actions">
-            <button type="submit" id="scan-btn">Run Scan</button>
-          </div>
-        </form>
-        <p class="status" id="scan-status"></p>
-        <div class="metrics">
-          <span id="m-tier">Tier: -</span>
-          <span id="m-scanned">Scanned: 0/0</span>
-          <span id="m-matches">Matches: 0</span>
-        </div>
-        {% if error %}<p class="err">{{ error }}</p>{% endif %}
-      </div>
-
-      <div class="card">
-        <h2>Signals</h2>
-        <p id="empty-note">No signals yet. Run a scan to see what Kona finds.</p>
-        <div id="signal-feed" class="signal-feed"></div>
       </div>
     </div>
 
@@ -1889,9 +1893,39 @@
       const pos = positions[idx];
       if (!pos) return;
       if (!confirm('🌋 Pele\'s Wrath on ' + pos.ticker + '? This will emergency sell at market.')) return;
-      // TODO: Wire to actual trading API when Kona engine is connected
       alert('Emergency sell order sent for ' + pos.ticker + '! (Demo mode — connect Kona engine for live execution)');
     }
+
+    /* ── Waves to Ride (auto-scan on load) ── */
+    async function scanWaves() {
+      const container = document.getElementById('waves-list');
+      if (!container) return;
+      container.innerHTML = '<div style="color:var(--muted);font-size:13px;">🔍 Scanning da ocean...</div>';
+      try {
+        const resp = await fetch('/api/waves');
+        if (!resp.ok) throw new Error('Scan failed');
+        const data = await resp.json();
+        if (!data.waves || !data.waves.length) {
+          container.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:10px 0;">No waves right now — ocean stay flat 🏖️</div>';
+          return;
+        }
+        container.innerHTML = '';
+        data.waves.forEach(w => {
+          const row = document.createElement('div');
+          row.className = 'wave-row';
+          const sideClass = w.side === 'call' ? 'call' : 'put';
+          const icon = w.side === 'call' ? '📈' : '📉';
+          row.innerHTML = '<span class="wave-ticker">' + w.ticker + '</span>'
+            + '<span class="wave-signal ' + sideClass + '">' + icon + ' ' + w.side.toUpperCase() + '</span>'
+            + '<span class="wave-detail">BB%: ' + (w.bb_pct || 0).toFixed(0) + '% · Stoch: ' + (w.stoch || 0).toFixed(0) + '</span>'
+            + '<span class="wave-price">$' + (w.close || 0).toFixed(2) + '</span>';
+          container.appendChild(row);
+        });
+      } catch(e) {
+        container.innerHTML = '<div style="color:var(--muted);font-size:13px;">Could not scan — try again later 🐢</div>';
+      }
+    }
+    scanWaves();
 
     /* ── Pause / Panic Controls ── */
     let scannerPaused = false;
