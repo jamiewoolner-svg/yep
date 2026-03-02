@@ -294,7 +294,7 @@
       height: 130px;
       border-radius: 50%;
       background: linear-gradient(135deg, #daa520, #b8860b);
-      border: 3px solid rgba(218,165,32,0.6);
+      border: none;
       cursor: pointer;
       z-index: 200;
       display: flex;
@@ -302,7 +302,7 @@
       justify-content: center;
       box-shadow: 0 4px 30px rgba(218,165,32,0.4);
       animation: kam-breathe 3s ease-in-out infinite;
-      padding: 0;
+      padding: 2px;
       overflow: visible;
     }
     .kam-fab:hover { transform: scale(1.05); }
@@ -544,12 +544,15 @@
     /* Strategy Banner */
     .strategy-banner {
       text-align: center;
-      padding: 16px 10px;
+      padding: 20px 10px;
       margin-bottom: 16px;
     }
     .strategy-banner img {
-      height: 120px;
-      filter: drop-shadow(0 0 40px rgba(218,165,32,0.35));
+      height: 180px;
+      max-width: 90%;
+      object-fit: contain;
+      filter: drop-shadow(0 0 50px rgba(218,165,32,0.4));
+      border: none;
     }
     /* Dashboard summary cards */
     .dash-cards {
@@ -793,7 +796,7 @@
 
     <div class="tab-bar">
       <button class="tab-btn active" data-tab="dashboard" onclick="showTab('dashboard')">Dashboard</button>
-      <button class="tab-btn" data-tab="scanner" onclick="showTab('scanner')">Scanner</button>
+      <button class="tab-btn" data-tab="scanner" onclick="showTab('scanner')">Activity</button>
       <button class="tab-btn" data-tab="watchlist" onclick="showTab('watchlist')">Watchlist</button>
       <button class="tab-btn" data-tab="journal" onclick="showTab('journal')">Journal</button>
     </div>
@@ -805,8 +808,8 @@
       </div>
 
       <div class="dash-actions">
-        <button class="dash-btn dash-btn-pause" id="dash-pause" onclick="togglePause()">⏸ Pause Scanner</button>
-        <button class="dash-btn dash-btn-panic" id="dash-panic" onclick="openPanic()">🚨 Panic Clear</button>
+        <button class="dash-btn dash-btn-pause" id="dash-pause" onclick="togglePause()">⏸ Pause Trading</button>
+        <button class="dash-btn dash-btn-panic" id="dash-panic" onclick="openPanic()">🚨 Panic Sell</button>
       </div>
 
       <div class="dash-cards" id="dash-cards">
@@ -850,8 +853,8 @@
 
     <div id="scanner-tab" class="tab-content">
       <div class="card">
-        <h1>🌋 Big Island Scanner</h1>
-        <p>One-button scan across S&amp;P 500 + QQQ using Kona house rules.</p>
+        <h1>🌋 Kona Activity</h1>
+        <p>Live scan across S&amp;P 500 + QQQ — Kona v56 options signals.</p>
         <form id="scan-form" method="post">
           <div class="actions">
             <button type="submit" id="scan-btn">Run Scan</button>
@@ -868,7 +871,7 @@
 
       <div class="card">
         <h2>Signals</h2>
-        <p id="empty-note">No matches yet. Run a scan.</p>
+        <p id="empty-note">No signals yet. Run a scan to see what Kona finds.</p>
         <div id="signal-feed" class="signal-feed"></div>
       </div>
     </div>
@@ -934,11 +937,11 @@
   <!-- Panic Modal -->
   <div class="panic-overlay" id="panic-overlay">
     <div class="panic-modal">
-      <h2>🚨 Panic Clear</h2>
-      <p>This will clear all scanner caches and pause the scanner. Are you sure?</p>
+      <h2>🚨 Panic Sell</h2>
+      <p>This will halt all trading activity, clear caches, and pause the system. Are you sure?</p>
       <div class="panic-modal-btns">
         <button class="panic-cancel" onclick="closePanic()">Cancel</button>
-        <button class="panic-confirm" onclick="confirmPanic()">Clear Everything</button>
+        <button class="panic-confirm" onclick="confirmPanic()">Stop Everything</button>
       </div>
     </div>
   </div>
@@ -1440,8 +1443,14 @@
         const r = await fetch('/api/ai/chat', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
+          credentials: 'same-origin',
           body: JSON.stringify({message: msg})
         });
+        if (r.status === 401) {
+          thinking.remove();
+          addKamMsg('Session expired brudda! Reload da page and log in again. 🤙', 'ai');
+          return;
+        }
         const data = await r.json();
         thinking.remove();
         addKamMsg(data.response || data.error || 'No response', 'ai');
@@ -1519,12 +1528,14 @@
           pullback.style.display = 'flex';
           const report = document.getElementById('kam-report');
           if (report) report.style.display = 'none';
-        } else {
-          // Snap to right side
-          fab.style.left = '';
-          fab.style.top = '';
-          fab.style.right = '24px';
-          fab.style.bottom = '24px';
+        } else if (wasDragged) {
+          // Stay where the user placed it — just clamp to viewport
+          const clampX = Math.max(0, Math.min(window.innerWidth - fab.offsetWidth, rect.left));
+          const clampY = Math.max(0, Math.min(window.innerHeight - fab.offsetHeight, rect.top));
+          fab.style.left = clampX + 'px';
+          fab.style.top = clampY + 'px';
+          fab.style.right = 'auto';
+          fab.style.bottom = 'auto';
         }
       }
 
@@ -1715,10 +1726,10 @@
     function updatePauseBtn() {
       const btn = document.getElementById('dash-pause');
       if (scannerPaused) {
-        btn.textContent = '▶ Resume Scanner';
+        btn.textContent = '▶ Resume Trading';
         btn.classList.add('paused');
       } else {
-        btn.textContent = '⏸ Pause Scanner';
+        btn.textContent = '⏸ Pause Trading';
         btn.classList.remove('paused');
       }
     }
@@ -1746,7 +1757,7 @@
       fetch('/api/panic-clear', {method: 'POST'}).then(r => r.json()).then(data => {
         scannerPaused = true;
         updatePauseBtn();
-        alert('Caches cleared and scanner paused.');
+        alert('All trading halted. Caches cleared.');
       }).catch(e => alert('Error: ' + e));
     }
 
