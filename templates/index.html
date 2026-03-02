@@ -87,7 +87,7 @@
       align-items: center;
       gap: 10px;
     }
-    .brand-logo { height: 60px; filter: drop-shadow(0 0 12px rgba(218,165,32,0.35)); border: none; }
+    .brand-logo { height: 96px; width: 96px; object-fit: contain; filter: drop-shadow(0 0 12px rgba(218,165,32,0.35)); border: none; }
     .brand-name {
       font-size: 18px;
       letter-spacing: 0.14em;
@@ -1122,6 +1122,9 @@
     const tierEl = document.getElementById('m-tier');
     const scannedEl = document.getElementById('m-scanned');
     const matchesEl = document.getElementById('m-matches');
+    // Guard: scanner elements may not exist if Activity tab is removed
+    const _noop = { textContent: '', style: {}, disabled: false, innerHTML: '', display: '' };
+    const _s = (el) => el || _noop;
 
     let activeController = null;
     const models = [];
@@ -1470,7 +1473,7 @@
       }
     }
 
-    form.addEventListener('submit', async (e) => {
+    if (form) form.addEventListener('submit', async (e) => {
       e.preventDefault();
       signalFeed.innerHTML = '';
       emptyNote.style.display = 'block';
