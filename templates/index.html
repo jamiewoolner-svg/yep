@@ -48,8 +48,8 @@
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       min-height: 100vh; padding: 20px; text-align: center;
     }
-    #login-screen img { width: min(85vw, 400px); margin-bottom: 20px; filter: drop-shadow(0 0 50px rgba(218,165,32,0.4)); }
-    #login-screen .sub { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
+    #login-screen img { width: min(90vw, 600px); margin-bottom: 20px; filter: drop-shadow(0 0 60px rgba(218,165,32,0.5)); }
+    #login-screen .sub { display: none; }
     .login-section { margin-bottom: 20px; width: 100%; max-width: 320px; }
     .login-section h3 { font-size: 14px; color: var(--muted); margin: 0 0 12px; text-transform: uppercase; letter-spacing: 0.1em; }
     .pin-row { display: flex; gap: 10px; justify-content: center; margin-bottom: 12px; }
@@ -97,14 +97,23 @@
       color: var(--gold);
       font-weight: 700;
     }
-    .brand-tag {
-      border: 1px solid var(--line);
-      background: var(--card);
-      color: var(--muted);
-      font-size: 12px;
-      border-radius: 999px;
-      padding: 4px 10px;
-      white-space: nowrap;
+    .brand-pnl {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      justify-content: center;
+    }
+    .header-pnl {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--gold);
+    }
+    .header-pnl.pos { color: #4ade80; }
+    .header-pnl.neg { color: #f87171; }
+    .header-sparkline {
+      width: 100px;
+      height: 32px;
     }
     .brand-logout {
       font-size: 11px; color: var(--muted); cursor: pointer; text-decoration: none;
@@ -568,16 +577,56 @@
     /* Strategy Banner */
     .strategy-banner {
       text-align: center;
-      padding: 8px 0;
-      margin-bottom: 16px;
+      padding: 0;
+      margin: 0 0 12px;
     }
     .strategy-banner img {
-      width: min(90%, 400px);
+      width: min(60%, 240px);
       height: auto;
       object-fit: contain;
-      filter: drop-shadow(0 0 30px rgba(218,165,32,0.3));
+      filter: drop-shadow(0 0 20px rgba(218,165,32,0.25));
       border: none;
+      padding: 0;
+      margin: 0;
     }
+    /* Open positions */
+    .open-pos-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+    }
+    .open-pos-row:last-child { border-bottom: none; }
+    .open-pos-info { display: flex; gap: 12px; align-items: center; flex: 1; }
+    .open-pos-ticker { font-weight: 700; min-width: 50px; }
+    .open-pos-side { font-size: 11px; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; }
+    .open-pos-side.long { background: rgba(74,222,128,0.15); color: #4ade80; }
+    .open-pos-side.short { background: rgba(248,113,113,0.15); color: #f87171; }
+    .open-pos-pnl { font-weight: 700; min-width: 70px; text-align: right; }
+    .open-pos-pnl.pos { color: #4ade80; }
+    .open-pos-pnl.neg { color: #f87171; }
+    .open-pos-panic {
+      background: linear-gradient(135deg, #dc2626, #991b1b);
+      color: #fff; border: none; border-radius: 6px;
+      padding: 4px 10px; font-size: 11px; font-weight: 700;
+      cursor: pointer; white-space: nowrap; margin-left: 10px;
+    }
+    .open-pos-panic:hover { opacity: 0.85; }
+    /* Waves to Ride */
+    .wave-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+      font-size: 13px;
+    }
+    .wave-row:last-child { border-bottom: none; }
+    .wave-ticker { font-weight: 700; min-width: 50px; }
+    .wave-signal { font-size: 11px; color: var(--gold); }
+    .wave-detail { font-size: 11px; color: var(--muted); }
     /* Dashboard summary cards */
     .dash-cards {
       display: grid;
@@ -813,14 +862,20 @@
         <img src="/bi-logo.png" alt="" class="brand-logo">
         <span class="brand-name">Big Island</span>
       </div>
-      <span class="brand-tag">🌺 Kona v56</span>
-      <a class="brand-logout" id="enroll-face-btn" onclick="enrollFaceId()" style="display:none;">🔐 Setup Face ID</a>
-      <a class="brand-logout" onclick="doLogout()">Logout</a>
+      <div class="brand-pnl">
+        <span id="header-pnl" class="header-pnl">$0</span>
+        <div id="header-sparkline" class="header-sparkline"></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <a class="brand-logout" id="enroll-face-btn" onclick="enrollFaceId()" style="display:none;">🔐 Face ID</a>
+        <a class="brand-logout" onclick="doLogout()">Logout</a>
+      </div>
     </div>
 
     <div class="tab-bar">
       <button class="tab-btn active" data-tab="dashboard" onclick="showTab('dashboard')">Dashboard</button>
       <button class="tab-btn" data-tab="scanner" onclick="showTab('scanner')">Activity</button>
+      <button class="tab-btn" data-tab="tradelog" onclick="showTab('tradelog')">Trade Log</button>
       <button class="tab-btn" data-tab="watchlist" onclick="showTab('watchlist')">Watchlist</button>
       <button class="tab-btn" data-tab="journal" onclick="showTab('journal')">Journal</button>
     </div>
@@ -838,10 +893,6 @@
 
       <div class="dash-cards" id="dash-cards">
         <div class="dash-card">
-          <div class="dash-card-label">Total P&L</div>
-          <div class="dash-card-value neutral" id="dash-pnl">$0</div>
-        </div>
-        <div class="dash-card">
           <div class="dash-card-label">Win Rate</div>
           <div class="dash-card-value neutral" id="dash-wr">-</div>
         </div>
@@ -855,23 +906,42 @@
         </div>
       </div>
 
-      <!-- P&L Card (moved from above tabs) -->
-      <div class="card pnl-card">
-        <div class="pnl-header">
-          <div>
-            <h3 style="margin-bottom:4px;">Total P&amp;L</h3>
-            <span id="pnl-total" class="pnl-total">$0</span>
-            <span id="pnl-stats" class="pnl-stats"></span>
-          </div>
-          <div class="pnl-controls">
-            <button class="pnl-btn" onclick="pnlPromptAdd()">+ Log Trade</button>
-            <button class="pnl-btn pnl-btn-muted" onclick="pnlToggleChart()">Chart</button>
-          </div>
+      <!-- Lifetime P&L Chart -->
+      <div class="card" style="padding:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <h3 style="margin:0;font-size:14px;">Lifetime P&L</h3>
+          <button class="pnl-btn" onclick="pnlPromptAdd()">+ Log Trade</button>
         </div>
-        <div id="pnl-chart-wrap" style="display:none;">
-          <div id="pnl-chart" style="width:100%;height:180px;"></div>
+        <div id="pnl-chart" style="width:100%;height:160px;"></div>
+      </div>
+
+      <!-- Open Positions -->
+      <div class="card" style="padding:14px;">
+        <h3 style="margin:0 0 10px;font-size:14px;">🌊 Open Positions</h3>
+        <div id="open-positions">
+          <div style="color:var(--muted);font-size:13px;">No open positions</div>
         </div>
-        <div id="pnl-recent" class="pnl-recent"></div>
+      </div>
+
+      <!-- Waves to Ride — upcoming signals -->
+      <div class="card" style="padding:14px;">
+        <h3 style="margin:0 0 10px;font-size:14px;">🏄 Waves to Ride</h3>
+        <p style="color:var(--muted);font-size:12px;margin:0 0 8px;">Stocks approaching Kona signal zones</p>
+        <div id="waves-list">
+          <div style="color:var(--muted);font-size:13px;">Scanning for waves...</div>
+        </div>
+        <button class="pnl-btn pnl-btn-muted" style="margin-top:10px;width:100%;" onclick="scanWaves()">🔍 Scan for Waves</button>
+      </div>
+    </div>
+
+    <!-- ── Trade Log Tab ── -->
+    <div id="tradelog-tab" class="tab-content">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <h2 style="margin:0;">📖 Trade Log</h2>
+          <button class="pnl-btn" onclick="pnlPromptAdd()">+ Log Trade</button>
+        </div>
+        <div id="tradelog-list" class="pnl-recent"></div>
       </div>
     </div>
 
@@ -1652,57 +1722,37 @@
 
     function pnlRender() {
       const trades = pnlLoad();
-      // Total
       const total = trades.reduce((s, t) => s + t.amt, 0);
-      const totalEl = document.getElementById('pnl-total');
-      totalEl.textContent = (total >= 0 ? '+$' : '-$') + Math.abs(total).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-      totalEl.className = 'pnl-total ' + (total > 0 ? 'pos' : total < 0 ? 'neg' : 'zero');
-      // Stats
-      const wins = trades.filter(t => t.amt > 0).length;
-      const losses = trades.filter(t => t.amt < 0).length;
-      const statsEl = document.getElementById('pnl-stats');
-      if (trades.length > 0) {
-        const wr = ((wins / trades.length) * 100).toFixed(0);
-        statsEl.textContent = trades.length + ' trades · ' + wr + '% win rate · ' + wins + 'W / ' + losses + 'L';
-      } else {
-        statsEl.textContent = 'No trades logged yet';
+      // Update header P&L
+      const headerPnl = document.getElementById('header-pnl');
+      if (headerPnl) {
+        headerPnl.textContent = (total >= 0 ? '+$' : '-$') + Math.abs(total).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
+        headerPnl.className = 'header-pnl ' + (total > 0 ? 'pos' : total < 0 ? 'neg' : '');
       }
-      // Recent trades (last 5)
-      const recent = document.getElementById('pnl-recent');
-      recent.innerHTML = '';
-      const show = trades.slice(-5).reverse();
-      show.forEach((t, i) => {
-        const idx = trades.length - 1 - i;
-        const row = document.createElement('div');
-        row.className = 'pnl-trade-row';
-        const amtClass = t.amt >= 0 ? 'pos' : 'neg';
-        const amtStr = (t.amt >= 0 ? '+$' : '-$') + Math.abs(t.amt).toFixed(2);
-        row.innerHTML = '<span class="pnl-trade-ticker">' + (t.ticker || '') + '</span>'
-          + '<span class="pnl-trade-date">' + (t.date || '') + ' · ' + (t.side || '') + '</span>'
-          + '<span class="pnl-trade-amt ' + amtClass + '">' + amtStr + '</span>'
-          + '<span class="pnl-trade-del" onclick="pnlDelete(' + idx + ')">×</span>';
-        recent.appendChild(row);
-      });
-      // Chart
+      // Draw lifetime chart (always visible)
       pnlDrawChart(trades);
+      // Draw header sparkline
+      pnlDrawSparkline(trades);
+      // Update trade log tab
+      renderTradeLog();
+      // Update dashboard cards
+      renderDashCards();
     }
 
     function pnlDrawChart(trades) {
-      const wrap = document.getElementById('pnl-chart-wrap');
-      if (wrap.style.display === 'none' || trades.length < 2) return;
+      if (trades.length < 2) {
+        const el = document.getElementById('pnl-chart');
+        if (el) el.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:40px 0;">Log trades to see your P&L chart</div>';
+        return;
+      }
       let cum = 0;
-      const dates = [];
-      const vals = [];
-      trades.forEach(t => {
-        cum += t.amt;
-        dates.push(t.date);
-        vals.push(cum);
-      });
-      const colors = vals.map(v => v >= 0 ? '#4ade80' : '#f87171');
+      const dates = [], vals = [];
+      trades.forEach(t => { cum += t.amt; dates.push(t.date); vals.push(cum); });
+      const endColor = vals[vals.length-1] >= 0 ? '#4ade80' : '#f87171';
       Plotly.newPlot('pnl-chart', [{
         x: dates, y: vals, type: 'scatter', mode: 'lines+markers',
-        line: { color: vals[vals.length-1] >= 0 ? '#4ade80' : '#f87171', width: 2 },
-        marker: { size: 5, color: colors },
+        line: { color: endColor, width: 2 },
+        marker: { size: 5, color: vals.map(v => v >= 0 ? '#4ade80' : '#f87171') },
         fill: 'tozeroy',
         fillcolor: vals[vals.length-1] >= 0 ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)',
       }], {
@@ -1715,10 +1765,43 @@
       }, { displayModeBar: false, responsive: true });
     }
 
-    function pnlToggleChart() {
-      const wrap = document.getElementById('pnl-chart-wrap');
-      wrap.style.display = wrap.style.display === 'none' ? 'block' : 'none';
-      if (wrap.style.display === 'block') pnlRender();
+    function renderTradeLog() {
+      const trades = pnlLoad();
+      const container = document.getElementById('tradelog-list');
+      if (!container) return;
+      container.innerHTML = '';
+      if (!trades.length) {
+        container.innerHTML = '<div style="color:var(--muted);font-size:13px;">No trades logged yet</div>';
+        return;
+      }
+      trades.slice().reverse().forEach((t, i) => {
+        const idx = trades.length - 1 - i;
+        const row = document.createElement('div');
+        row.className = 'pnl-trade-row';
+        const amtClass = t.amt >= 0 ? 'pos' : 'neg';
+        const amtStr = (t.amt >= 0 ? '+$' : '-$') + Math.abs(t.amt).toFixed(2);
+        row.innerHTML = '<span class="pnl-trade-ticker">' + (t.ticker || '') + '</span>'
+          + '<span class="pnl-trade-date">' + (t.date || '') + ' · ' + (t.side || '') + '</span>'
+          + '<span class="pnl-trade-amt ' + amtClass + '">' + amtStr + '</span>'
+          + '<span class="pnl-trade-del" onclick="pnlDelete(' + idx + ')">×</span>';
+        container.appendChild(row);
+      });
+    }
+
+    function pnlDrawSparkline(trades) {
+      const el = document.getElementById('header-sparkline');
+      if (!el || trades.length < 2) return;
+      let cum = 0;
+      const vals = trades.map(t => { cum += t.amt; return cum; });
+      const max = Math.max(...vals), min = Math.min(...vals);
+      const range = max - min || 1;
+      const w = 100, h = 32, step = w / (vals.length - 1);
+      let path = 'M0,' + (h - ((vals[0] - min) / range) * h);
+      for (let i = 1; i < vals.length; i++) {
+        path += ' L' + (i * step) + ',' + (h - ((vals[i] - min) / range) * h);
+      }
+      const color = vals[vals.length-1] >= 0 ? '#4ade80' : '#f87171';
+      el.innerHTML = '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '"><path d="' + path + '" fill="none" stroke="' + color + '" stroke-width="1.5"/></svg>';
     }
 
     function pnlPromptAdd() {
@@ -1754,21 +1837,16 @@
     /* ── Dashboard Summary Cards ── */
     function renderDashCards() {
       const trades = pnlLoad();
-      const total = trades.reduce((s, t) => s + t.amt, 0);
       const wins = trades.filter(t => t.amt > 0).length;
       const wr = trades.length > 0 ? ((wins / trades.length) * 100).toFixed(0) + '%' : '-';
       const best = trades.length > 0 ? Math.max(...trades.map(t => t.amt)) : 0;
-
-      const pnlEl = document.getElementById('dash-pnl');
-      pnlEl.textContent = (total >= 0 ? '+$' : '-$') + Math.abs(total).toFixed(2);
-      pnlEl.className = 'dash-card-value ' + (total > 0 ? 'pos' : total < 0 ? 'neg' : 'neutral');
 
       document.getElementById('dash-wr').textContent = wr;
       document.getElementById('dash-count').textContent = trades.length;
 
       const bestEl = document.getElementById('dash-best');
       if (best > 0) {
-        bestEl.textContent = '+$' + best.toFixed(2);
+        bestEl.textContent = '+$' + best.toFixed(0);
         bestEl.className = 'dash-card-value pos';
       } else {
         bestEl.textContent = '-';
@@ -1776,6 +1854,68 @@
       }
     }
     renderDashCards();
+
+    /* ── Open Positions ── */
+    function renderOpenPositions() {
+      // Pull from localStorage — Kona engine would populate this via API
+      const positions = JSON.parse(localStorage.getItem('kona_open_positions') || '[]');
+      const container = document.getElementById('open-positions');
+      if (!positions.length) {
+        container.innerHTML = '<div style="color:var(--muted);font-size:13px;">No open positions</div>';
+        return;
+      }
+      container.innerHTML = '';
+      positions.forEach((p, i) => {
+        const pnlClass = (p.pnl || 0) >= 0 ? 'pos' : 'neg';
+        const pnlStr = (p.pnl >= 0 ? '+$' : '-$') + Math.abs(p.pnl || 0).toFixed(0);
+        const row = document.createElement('div');
+        row.className = 'open-pos-row';
+        row.innerHTML = '<div class="open-pos-info">'
+          + '<span class="open-pos-ticker">' + (p.ticker || '?') + '</span>'
+          + '<span class="open-pos-side ' + (p.side || 'long') + '">' + (p.side || 'long') + '</span>'
+          + '<span style="color:var(--muted);font-size:11px;">' + (p.contracts || 1) + 'x @ $' + (p.entry || 0).toFixed(2) + '</span>'
+          + '</div>'
+          + '<span class="open-pos-pnl ' + pnlClass + '">' + pnlStr + '</span>'
+          + '<button class="open-pos-panic" onclick="panicPosition(' + i + ')">🌋 Sell</button>';
+        container.appendChild(row);
+      });
+    }
+    renderOpenPositions();
+
+    function panicPosition(idx) {
+      const positions = JSON.parse(localStorage.getItem('kona_open_positions') || '[]');
+      const pos = positions[idx];
+      if (!pos) return;
+      if (!confirm('🌋 Pele\'s Wrath on ' + pos.ticker + '? This will emergency sell at market.')) return;
+      // TODO: Wire to actual trading API when Kona engine is connected
+      alert('Emergency sell order sent for ' + pos.ticker + '! (Demo mode — connect Kona engine for live execution)');
+    }
+
+    /* ── Waves to Ride (upcoming signals) ── */
+    async function scanWaves() {
+      const container = document.getElementById('waves-list');
+      container.innerHTML = '<div style="color:var(--muted);font-size:13px;">🔍 Scanning da ocean...</div>';
+      try {
+        const resp = await fetch('/api/waves');
+        if (!resp.ok) throw new Error('Scan failed');
+        const data = await resp.json();
+        if (!data.waves || !data.waves.length) {
+          container.innerHTML = '<div style="color:var(--muted);font-size:13px;">No waves right now — ocean stay flat 🏖️</div>';
+          return;
+        }
+        container.innerHTML = '';
+        data.waves.forEach(w => {
+          const row = document.createElement('div');
+          row.className = 'wave-row';
+          row.innerHTML = '<span class="wave-ticker">' + w.ticker + '</span>'
+            + '<span class="wave-signal">' + (w.side === 'call' ? '📈' : '📉') + ' ' + w.side.toUpperCase() + '</span>'
+            + '<span class="wave-detail">BB%: ' + (w.bb_pct || 0).toFixed(0) + '% · Stoch: ' + (w.stoch || 0).toFixed(0) + '</span>';
+          container.appendChild(row);
+        });
+      } catch(e) {
+        container.innerHTML = '<div style="color:var(--muted);font-size:13px;">Could not scan — try again later 🐢</div>';
+      }
+    }
 
     /* ── Pause / Panic Controls ── */
     let scannerPaused = false;

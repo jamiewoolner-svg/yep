@@ -2285,14 +2285,7 @@ The system exploits mean-reversion using Bollinger Bands and Stochastic RSI.
 
 
 def _ai_chat(user_message: str) -> str:
-    """Send a message to Claude with context."""
-    # Use KonaAI consultant if available (provides trading state context)
-    if _kona_ai:
-        try:
-            return _kona_ai.chat(user_message)
-        except Exception:
-            pass  # Fall through to simple chat
-
+    """Send a message to Claude as King Kam."""
     if not HAS_ANTHROPIC or not ANTHROPIC_API_KEY:
         return "Set ANTHROPIC_API_KEY environment variable to enable King Kam."
 
@@ -2550,6 +2543,51 @@ def api_journal_analyze() -> Response:
     entries.append(entry)
     _save_journal(entries)
     return jsonify({'ok': True, 'entry': entry})
+
+
+# ── Waves to Ride — stocks approaching Kona signal zones ─────────────────────
+
+@app.route("/api/waves")
+@require_auth
+def api_waves() -> Response:
+    """Scan a sample of liquid stocks for approaching Kona signals."""
+    # Use a curated list of high-liquidity tickers for quick scanning
+    wave_tickers = [
+        'AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'TSLA', 'AMD',
+        'NFLX', 'CRM', 'ORCL', 'ADBE', 'AVGO', 'COST', 'INTC', 'QCOM',
+        'BA', 'DIS', 'PYPL', 'SQ', 'SHOP', 'UBER', 'ABNB', 'COIN',
+        'XOM', 'JPM', 'GS', 'V', 'MA', 'UNH', 'JNJ', 'PFE',
+    ]
+    waves = []
+    for ticker in wave_tickers:
+        try:
+            bars = _watchlist_fetch_bars(ticker)
+            ind = _watchlist_indicators(bars)
+            if not ind:
+                continue
+            bb = ind['bb_pct']
+            stoch = ind['stoch_k']
+            # Call signal zone: BB% < 15% and Stoch < 35
+            if bb < 0.15 and stoch < 35:
+                waves.append({
+                    'ticker': ticker, 'side': 'call',
+                    'bb_pct': bb * 100, 'stoch': stoch,
+                    'rsi': ind.get('rsi', 0), 'close': ind.get('close', 0),
+                })
+            # Put signal zone: BB% > 85% and Stoch > 65
+            elif bb > 0.85 and stoch > 65:
+                waves.append({
+                    'ticker': ticker, 'side': 'put',
+                    'bb_pct': bb * 100, 'stoch': stoch,
+                    'rsi': ind.get('rsi', 0), 'close': ind.get('close', 0),
+                })
+        except Exception:
+            continue
+        if len(waves) >= 10:
+            break
+    # Sort by proximity to signal (calls by lowest bb_pct, puts by highest)
+    waves.sort(key=lambda w: w['bb_pct'] if w['side'] == 'call' else -w['bb_pct'])
+    return jsonify({'waves': waves})
 
 
 if __name__ == "__main__":
