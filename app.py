@@ -1387,6 +1387,12 @@ def healthz() -> Response:
 @app.route("/scan_stream", methods=["POST"])
 @require_auth
 def scan_stream() -> Response:
+    # Check pause state
+    controls = _load_controls()
+    if controls.get('paused'):
+        payload = json.dumps({"type": "error", "message": "Scanner is paused. Resume from the Dashboard to run scans."})
+        return Response(payload + "\n", mimetype="application/x-ndjson")
+
     workers = max(1, min(8, int(os.getenv("SCAN_WORKERS", "4"))))
     plot_days = 260
 
@@ -2322,6 +2328,164 @@ def ai_reset() -> Response:
     global _ai_chat_history
     _ai_chat_history = []
     return jsonify({"ok": True})
+
+
+# ── Scanner Controls ──────────────────────────────────────────
+CONTROLS_FILE = os.path.join(_DATA_DIR, 'kona_controls.json')
+JOURNAL_FILE = os.path.join(_DATA_DIR, 'kona_journal.json')
+
+
+def _load_controls() -> dict[str, Any]:
+    try:
+        with open(CONTROLS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {'paused': False}
+
+
+def _save_controls(controls: dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(CONTROLS_FILE), exist_ok=True)
+    with open(CONTROLS_FILE, 'w') as f:
+        json.dump(controls, f, indent=2)
+
+
+@app.route("/api/controls", methods=["GET", "POST"])
+@require_auth
+def api_controls() -> Response:
+    if request.method == "GET":
+        return jsonify(_load_controls())
+    data = request.get_json(silent=True) or {}
+    controls = _load_controls()
+    if 'paused' in data:
+        controls['paused'] = bool(data['paused'])
+    _save_controls(controls)
+    return jsonify(controls)
+
+
+@app.route("/api/panic-clear", methods=["POST"])
+@require_auth
+def api_panic_clear() -> Response:
+    # Clear caches
+    with _CHART_CACHE_LOCK:
+        _CHART_CACHE.clear()
+    with _SCAN_SNAPSHOT_LOCK:
+        _SCAN_SNAPSHOT_CACHE.clear()
+    with _EVENT_CACHE_LOCK:
+        _EVENT_CACHE.clear()
+    # Pause scanner
+    controls = _load_controls()
+    controls['paused'] = True
+    _save_controls(controls)
+    return jsonify({'ok': True, 'message': 'All caches cleared, scanner paused'})
+
+
+# ── Trade Journal ─────────────────────────────────────────────
+
+def _load_journal() -> list[dict[str, Any]]:
+    try:
+        with open(JOURNAL_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_journal(entries: list[dict[str, Any]]) -> None:
+    os.makedirs(os.path.dirname(JOURNAL_FILE), exist_ok=True)
+    with open(JOURNAL_FILE, 'w') as f:
+        json.dump(entries, f, indent=2)
+
+
+@app.route("/api/journal", methods=["GET"])
+@require_auth
+def api_journal() -> Response:
+    entries = _load_journal()
+    return jsonify({'entries': sorted(entries, key=lambda e: e.get('date', ''), reverse=True)})
+
+
+@app.route("/api/journal/news", methods=["POST"])
+@require_auth
+def api_journal_news() -> Response:
+    data = request.get_json(silent=True) or {}
+    content = data.get('content', '').strip()
+    if not content:
+        return jsonify({'error': 'No content'}), 400
+    entries = _load_journal()
+    entry = {
+        'id': secrets.token_hex(8),
+        'type': 'news',
+        'date': datetime.utcnow().strftime('%Y-%m-%d %H:%M'),
+        'content': content,
+        'notes': [],
+    }
+    entries.append(entry)
+    _save_journal(entries)
+    return jsonify({'ok': True, 'entry': entry})
+
+
+@app.route("/api/journal/note", methods=["POST"])
+@require_auth
+def api_journal_note() -> Response:
+    data = request.get_json(silent=True) or {}
+    entry_id = data.get('id', '').strip()
+    note = data.get('note', '').strip()
+    if not entry_id or not note:
+        return jsonify({'error': 'Missing id or note'}), 400
+    entries = _load_journal()
+    for e in entries:
+        if e.get('id') == entry_id:
+            e.setdefault('notes', []).append(note)
+            _save_journal(entries)
+            return jsonify({'ok': True})
+    return jsonify({'error': 'Entry not found'}), 404
+
+
+@app.route("/api/journal/analyze", methods=["POST"])
+@require_auth
+def api_journal_analyze() -> Response:
+    data = request.get_json(silent=True) or {}
+    trades = data.get('trades', [])
+    if not trades:
+        return jsonify({'error': 'No trades to analyze'}), 400
+
+    # Build summary for AI
+    total = sum(t.get('amt', 0) for t in trades)
+    wins = [t for t in trades if t.get('amt', 0) > 0]
+    losses = [t for t in trades if t.get('amt', 0) < 0]
+    summary = f"Total P&L: ${total:.2f}, {len(trades)} trades, {len(wins)} wins, {len(losses)} losses."
+    if wins:
+        summary += f" Best win: ${max(w['amt'] for w in wins):.2f}."
+    if losses:
+        summary += f" Worst loss: ${min(l['amt'] for l in losses):.2f}."
+    trade_lines = [f"{t.get('ticker','?')} {t.get('side','?')} ${t.get('amt',0):.2f} on {t.get('date','?')}" for t in trades[-10:]]
+    summary += "\nRecent trades:\n" + "\n".join(trade_lines)
+
+    # Use AI to analyze
+    analysis = "Trade analysis not available (AI not configured)."
+    if HAS_ANTHROPIC and ANTHROPIC_API_KEY:
+        try:
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            resp = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=500,
+                system="You are King Kam, a Hawaiian trading advisor. Analyze the user's trading history and provide insights in Hawaiian Pidgin English. Be encouraging but honest. Keep it under 200 words.",
+                messages=[{"role": "user", "content": f"Analyze my trades:\n{summary}"}],
+            )
+            analysis = resp.content[0].text
+        except Exception as ex:
+            analysis = f"AI analysis error: {ex}"
+
+    # Save as journal entry
+    entries = _load_journal()
+    entry = {
+        'id': secrets.token_hex(8),
+        'type': 'analysis',
+        'date': datetime.utcnow().strftime('%Y-%m-%d %H:%M'),
+        'content': analysis,
+        'notes': [],
+    }
+    entries.append(entry)
+    _save_journal(entries)
+    return jsonify({'ok': True, 'entry': entry})
 
 
 if __name__ == "__main__":
