@@ -48,7 +48,7 @@
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       min-height: 100vh; padding: 20px; text-align: center;
     }
-    #login-screen img { width: min(90vw, 600px); margin-bottom: 20px; filter: drop-shadow(0 0 60px rgba(218,165,32,0.5)); }
+    #login-screen img { width: 92vw; max-width: 820px; margin-bottom: 24px; filter: drop-shadow(0 0 80px rgba(218,165,32,0.6)); }
     #login-screen .sub { display: none; }
     .login-section { margin-bottom: 20px; width: 100%; max-width: 320px; }
     .login-section h3 { font-size: 14px; color: var(--muted); margin: 0 0 12px; text-transform: uppercase; letter-spacing: 0.1em; }
@@ -570,6 +570,34 @@
     @media (max-width: 600px) {
       .pnl-total { font-size: 22px; }
     }
+    /* Trade Ledger Table */
+    .ledger-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .ledger-table th {
+      text-align: left;
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 6px 8px;
+      border-bottom: 2px solid var(--line);
+      white-space: nowrap;
+    }
+    .ledger-table th.num, .ledger-table td.num { text-align: right; }
+    .ledger-table td {
+      padding: 7px 8px;
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+    }
+    .ledger-table tr:last-child td { border-bottom: none; }
+    .ledger-table .side-call { color: #4ade80; font-weight: 600; }
+    .ledger-table .side-put { color: #f87171; font-weight: 600; }
+    .ledger-table .pnl-pos { color: #4ade80; font-weight: 700; }
+    .ledger-table .pnl-neg { color: #f87171; font-weight: 700; }
+    .ledger-table .ticker { font-weight: 700; }
     /* Strategy Banner */
     .strategy-banner {
       text-align: center;
@@ -870,68 +898,80 @@
       </div>
     </div>
 
+    <!-- ── Dashboard (always visible) ── -->
+    <div class="strategy-banner">
+      <img src="/kona-logo.png" alt="Kona Strategy">
+    </div>
+
+    <div class="dash-actions">
+      <button class="dash-btn dash-btn-pause" id="dash-pause" onclick="togglePause()">🌺 Ho'omaha (Pause)</button>
+      <button class="dash-btn dash-btn-panic" id="dash-panic" onclick="openPanic()">🌋 Pele's Wrath</button>
+    </div>
+
+    <div class="dash-cards" id="dash-cards">
+      <div class="dash-card">
+        <div class="dash-card-label">Win Rate</div>
+        <div class="dash-card-value neutral" id="dash-wr">-</div>
+      </div>
+      <div class="dash-card">
+        <div class="dash-card-label">Trades</div>
+        <div class="dash-card-value neutral" id="dash-count">0</div>
+      </div>
+      <div class="dash-card">
+        <div class="dash-card-label">Best Trade</div>
+        <div class="dash-card-value neutral" id="dash-best">-</div>
+      </div>
+    </div>
+
+    <!-- Open Positions -->
+    <div class="card" style="padding:14px;">
+      <h3 style="margin:0 0 10px;font-size:14px;">🌊 Open Positions</h3>
+      <div id="open-positions">
+        <div style="color:var(--muted);font-size:13px;">No open positions</div>
+      </div>
+    </div>
+
+    <!-- Waves to Ride — auto-scans on load -->
+    <div class="card" style="padding:14px;">
+      <h3 style="margin:0 0 10px;font-size:14px;">🏄 Waves to Ride</h3>
+      <p style="color:var(--muted);font-size:12px;margin:0 0 8px;">Stocks approaching Kona signal zones</p>
+      <div id="waves-list">
+        <div style="color:var(--muted);font-size:13px;">🔍 Scanning da ocean...</div>
+      </div>
+    </div>
+
     <div class="tab-bar">
-      <button class="tab-btn active" data-tab="dashboard" onclick="showTab('dashboard')">Dashboard</button>
-      <button class="tab-btn" data-tab="scanner" onclick="showTab('scanner')">Activity</button>
-      <button class="tab-btn" data-tab="tradelog" onclick="showTab('tradelog')">Trade Log</button>
+      <button class="tab-btn active" data-tab="scanner" onclick="showTab('scanner')">Activity</button>
+      <button class="tab-btn" data-tab="tradelog" onclick="showTab('tradelog')">Trade Ledger</button>
       <button class="tab-btn" data-tab="watchlist" onclick="showTab('watchlist')">Watchlist</button>
       <button class="tab-btn" data-tab="journal" onclick="showTab('journal')">Journal</button>
     </div>
 
-    <!-- ── Dashboard Tab ── -->
-    <div id="dashboard-tab" class="tab-content active">
-      <div class="strategy-banner">
-        <img src="/kona-logo.png" alt="Kona Strategy">
-      </div>
-
-      <div class="dash-actions">
-        <button class="dash-btn dash-btn-pause" id="dash-pause" onclick="togglePause()">🌺 Ho'omaha (Pause)</button>
-        <button class="dash-btn dash-btn-panic" id="dash-panic" onclick="openPanic()">🌋 Pele's Wrath</button>
-      </div>
-
-      <div class="dash-cards" id="dash-cards">
-        <div class="dash-card">
-          <div class="dash-card-label">Win Rate</div>
-          <div class="dash-card-value neutral" id="dash-wr">-</div>
-        </div>
-        <div class="dash-card">
-          <div class="dash-card-label">Trades</div>
-          <div class="dash-card-value neutral" id="dash-count">0</div>
-        </div>
-        <div class="dash-card">
-          <div class="dash-card-label">Best Trade</div>
-          <div class="dash-card-value neutral" id="dash-best">-</div>
-        </div>
-      </div>
-
-      <!-- Open Positions -->
-      <div class="card" style="padding:14px;">
-        <h3 style="margin:0 0 10px;font-size:14px;">🌊 Open Positions</h3>
-        <div id="open-positions">
-          <div style="color:var(--muted);font-size:13px;">No open positions</div>
-        </div>
-      </div>
-
-      <!-- Waves to Ride — auto-scans on load -->
-      <div class="card" style="padding:14px;">
-        <h3 style="margin:0 0 10px;font-size:14px;">🏄 Waves to Ride</h3>
-        <p style="color:var(--muted);font-size:12px;margin:0 0 8px;">Stocks approaching Kona signal zones</p>
-        <div id="waves-list">
-          <div style="color:var(--muted);font-size:13px;">🔍 Scanning da ocean...</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── Trade Log Tab ── -->
+    <!-- ── Trade Ledger Tab ── -->
     <div id="tradelog-tab" class="tab-content">
-      <div class="card">
-        <h2 style="margin:0 0 4px;">📖 Trade Log</h2>
-        <p style="color:var(--muted);font-size:12px;margin:0 0 12px;">Complete ledger of all trades processed</p>
-        <div id="tradelog-list"></div>
+      <div class="card" style="padding:14px;overflow-x:auto;">
+        <h2 style="margin:0 0 4px;">📖 Trade Ledger</h2>
+        <p style="color:var(--muted);font-size:12px;margin:0 0 12px;">Complete record of all trades</p>
+        <table class="ledger-table" id="tradelog-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Ticker</th>
+              <th>Side</th>
+              <th class="num">Bid</th>
+              <th class="num">Ask</th>
+              <th class="num">Spread</th>
+              <th class="num">Price</th>
+              <th class="num">P&L</th>
+            </tr>
+          </thead>
+          <tbody id="tradelog-body"></tbody>
+        </table>
+        <div id="tradelog-empty" style="color:var(--muted);font-size:13px;padding:20px 0;text-align:center;display:none;">No trades recorded yet</div>
       </div>
     </div>
 
-    <div id="scanner-tab" class="tab-content">
+    <div id="scanner-tab" class="tab-content active">
       <div class="card">
         <h1>🌋 Kona Activity</h1>
         <p>Live scan across S&amp;P 500 + QQQ — Kona v56 options signals.</p>
@@ -1725,28 +1765,37 @@
 
     function renderTradeLog() {
       const trades = pnlLoad();
-      const container = document.getElementById('tradelog-list');
-      if (!container) return;
-      container.innerHTML = '';
+      const tbody = document.getElementById('tradelog-body');
+      const emptyMsg = document.getElementById('tradelog-empty');
+      const table = document.getElementById('tradelog-table');
+      if (!tbody) return;
+      tbody.innerHTML = '';
       if (!trades.length) {
-        container.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:20px 0;text-align:center;">No trades recorded yet</div>';
+        if (table) table.style.display = 'none';
+        if (emptyMsg) emptyMsg.style.display = 'block';
         return;
       }
-      // Table header
-      container.innerHTML = '<div class="pnl-trade-row" style="border-bottom:2px solid var(--line);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em;">'
-        + '<span class="pnl-trade-ticker">Ticker</span>'
-        + '<span class="pnl-trade-date">Date / Side</span>'
-        + '<span class="pnl-trade-amt">P&L</span></div>';
+      if (table) table.style.display = '';
+      if (emptyMsg) emptyMsg.style.display = 'none';
       // All trades, newest first
       trades.slice().reverse().forEach(t => {
-        const row = document.createElement('div');
-        row.className = 'pnl-trade-row';
-        const amtClass = t.amt >= 0 ? 'pos' : 'neg';
-        const amtStr = (t.amt >= 0 ? '+$' : '-$') + Math.abs(t.amt).toFixed(2);
-        row.innerHTML = '<span class="pnl-trade-ticker">' + (t.ticker || '') + '</span>'
-          + '<span class="pnl-trade-date">' + (t.date || '') + ' · ' + (t.side || '') + '</span>'
-          + '<span class="pnl-trade-amt ' + amtClass + '">' + amtStr + '</span>';
-        container.appendChild(row);
+        const row = document.createElement('tr');
+        const pnlClass = t.amt >= 0 ? 'pnl-pos' : 'pnl-neg';
+        const pnlStr = (t.amt >= 0 ? '+$' : '-$') + Math.abs(t.amt).toFixed(2);
+        const sideClass = (t.side || '').toLowerCase() === 'call' ? 'side-call' : 'side-put';
+        const bid = t.bid != null ? '$' + Number(t.bid).toFixed(2) : '-';
+        const ask = t.ask != null ? '$' + Number(t.ask).toFixed(2) : '-';
+        const spread = (t.bid != null && t.ask != null) ? '$' + Math.abs(t.ask - t.bid).toFixed(2) : (t.spread != null ? '$' + Number(t.spread).toFixed(2) : '-');
+        const price = t.price != null ? '$' + Number(t.price).toFixed(2) : '-';
+        row.innerHTML = '<td>' + (t.date || '') + '</td>'
+          + '<td class="ticker">' + (t.ticker || '') + '</td>'
+          + '<td class="' + sideClass + '">' + (t.side || '').toUpperCase() + '</td>'
+          + '<td class="num">' + bid + '</td>'
+          + '<td class="num">' + ask + '</td>'
+          + '<td class="num">' + spread + '</td>'
+          + '<td class="num">' + price + '</td>'
+          + '<td class="num ' + pnlClass + '">' + pnlStr + '</td>';
+        tbody.appendChild(row);
       });
     }
 
