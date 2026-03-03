@@ -914,6 +914,7 @@
         </div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;">
+        <span id="engine-dot" title="Engine status" style="width:10px;height:10px;border-radius:50%;background:#666;display:inline-block;"></span>
         <a class="brand-logout" id="enroll-face-btn" onclick="enrollFaceId()" style="display:none;">🔐 Face ID</a>
         <a class="brand-logout" onclick="doLogout()">Logout</a>
       </div>
@@ -971,10 +972,10 @@
               <th>Date</th>
               <th>Ticker</th>
               <th>Side</th>
-              <th class="num">Bid</th>
-              <th class="num">Ask</th>
-              <th class="num">Spread</th>
-              <th class="num">Price</th>
+              <th class="num">Entry</th>
+              <th class="num">Exit</th>
+              <th class="num">Exit Type</th>
+              <th class="num">Hold</th>
               <th class="num">P&L</th>
             </tr>
           </thead>
@@ -1728,33 +1729,44 @@
     }
 
     /* ── Watchlist scanner ── */
-    /* ── P&L Tracker ──────────────────────────────────────────── */
-    const PNL_KEY = 'kona_pnl_trades';
-    function pnlLoad() {
-      try { return JSON.parse(localStorage.getItem(PNL_KEY)) || []; }
-      catch { return []; }
+    /* ── P&L Tracker (live from API) ──────────────────────────── */
+    let _cachedTrades = [];
+
+    async function fetchLiveTrades() {
+      try {
+        const resp = await fetch('/api/trades');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        _cachedTrades = (data.trades || []).map(t => ({
+          date: t.date || '',
+          ticker: t.ticker || '',
+          side: t.side || '',
+          amt: t.pnl || 0,
+          pnl_pct: t.pnl_pct || 0,
+          exit_type: t.exit_type || '',
+          hold_days: t.hold_days || '',
+          entry_price: t.entry_price || '',
+          exit_price: t.exit_price || '',
+        }));
+        pnlRender();
+      } catch(e) { /* silently retry next cycle */ }
     }
-    function pnlSave(trades) { localStorage.setItem(PNL_KEY, JSON.stringify(trades)); }
 
     function pnlRender() {
-      const trades = pnlLoad();
+      const trades = _cachedTrades;
       const total = trades.reduce((s, t) => s + t.amt, 0);
-      // Update header P&L
       const headerPnl = document.getElementById('header-pnl');
       if (headerPnl) {
         headerPnl.textContent = (total >= 0 ? '+$' : '-$') + Math.abs(total).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
         headerPnl.className = 'header-pnl ' + (total > 0 ? 'pos' : total < 0 ? 'neg' : '');
       }
-      // Draw header sparkline
       pnlDrawSparkline(trades);
-      // Update trade log tab
       renderTradeLog();
-      // Update dashboard cards
       renderDashCards();
     }
 
     function renderTradeLog() {
-      const trades = pnlLoad();
+      const trades = _cachedTrades;
       const tbody = document.getElementById('tradelog-body');
       const emptyMsg = document.getElementById('tradelog-empty');
       const table = document.getElementById('tradelog-table');
@@ -1767,24 +1779,22 @@
       }
       if (table) table.style.display = '';
       if (emptyMsg) emptyMsg.style.display = 'none';
-      // All trades, newest first
-      trades.slice().reverse().forEach(t => {
+      trades.forEach(t => {
         const row = document.createElement('tr');
         const pnlClass = t.amt >= 0 ? 'pnl-pos' : 'pnl-neg';
         const pnlStr = (t.amt >= 0 ? '+$' : '-$') + Math.abs(t.amt).toFixed(2);
         const sideClass = (t.side || '').toLowerCase() === 'call' ? 'side-call' : 'side-put';
-        const bid = t.bid != null ? '$' + Number(t.bid).toFixed(2) : '-';
-        const ask = t.ask != null ? '$' + Number(t.ask).toFixed(2) : '-';
-        const spread = (t.bid != null && t.ask != null) ? '$' + Math.abs(t.ask - t.bid).toFixed(2) : (t.spread != null ? '$' + Number(t.spread).toFixed(2) : '-');
-        const price = t.price != null ? '$' + Number(t.price).toFixed(2) : '-';
+        const entry = t.entry_price ? '$' + Number(t.entry_price).toFixed(2) : '-';
+        const exit = t.exit_price ? '$' + Number(t.exit_price).toFixed(2) : '-';
+        const pctStr = (t.pnl_pct >= 0 ? '+' : '') + Number(t.pnl_pct).toFixed(1) + '%';
         row.innerHTML = '<td>' + (t.date || '') + '</td>'
           + '<td class="ticker">' + (t.ticker || '') + '</td>'
           + '<td class="' + sideClass + '">' + (t.side || '').toUpperCase() + '</td>'
-          + '<td class="num">' + bid + '</td>'
-          + '<td class="num">' + ask + '</td>'
-          + '<td class="num">' + spread + '</td>'
-          + '<td class="num">' + price + '</td>'
-          + '<td class="num ' + pnlClass + '">' + pnlStr + '</td>';
+          + '<td class="num">' + entry + '</td>'
+          + '<td class="num">' + exit + '</td>'
+          + '<td class="num">' + (t.exit_type || '-') + '</td>'
+          + '<td class="num">' + (t.hold_days || '-') + 'd</td>'
+          + '<td class="num ' + pnlClass + '">' + pnlStr + ' (' + pctStr + ')</td>';
         tbody.appendChild(row);
       });
     }
@@ -1805,39 +1815,12 @@
       el.innerHTML = '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '"><path d="' + path + '" fill="none" stroke="' + color + '" stroke-width="1.5"/></svg>';
     }
 
-    function pnlPromptAdd() {
-      const ticker = prompt('Ticker (e.g. AAPL):');
-      if (!ticker) return;
-      const side = prompt('Side (call/put):') || 'call';
-      const amtStr = prompt('P&L amount (positive = win, negative = loss, e.g. 450 or -200):');
-      if (amtStr === null) return;
-      const amt = parseFloat(amtStr);
-      if (isNaN(amt)) { alert('Invalid amount'); return; }
-      const trades = pnlLoad();
-      trades.push({
-        ticker: ticker.toUpperCase().trim(),
-        side: side.toLowerCase().trim(),
-        amt: amt,
-        date: new Date().toISOString().slice(0, 10),
-      });
-      pnlSave(trades);
-      pnlRender();
-    }
-
-    function pnlDelete(idx) {
-      if (!confirm('Remove this trade?')) return;
-      const trades = pnlLoad();
-      trades.splice(idx, 1);
-      pnlSave(trades);
-      pnlRender();
-    }
-
-    // Init P&L on load
-    pnlRender();
+    // Init: fetch live trades on load
+    fetchLiveTrades();
 
     /* ── Dashboard Summary Cards ── */
     function renderDashCards() {
-      const trades = pnlLoad();
+      const trades = _cachedTrades;
       const wins = trades.filter(t => t.amt > 0).length;
       const wr = trades.length > 0 ? ((wins / trades.length) * 100).toFixed(0) + '%' : '-';
       const best = trades.length > 0 ? Math.max(...trades.map(t => t.amt)) : 0;
@@ -1856,39 +1839,61 @@
     }
     renderDashCards();
 
-    /* ── Open Positions ── */
+    /* ── Open Positions (live from API) ── */
+    let _cachedPositions = [];
+
+    async function fetchLivePositions() {
+      try {
+        const resp = await fetch('/api/positions');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        _cachedPositions = data.positions || [];
+        renderOpenPositions();
+      } catch(e) { /* retry next cycle */ }
+    }
+
     function renderOpenPositions() {
-      // Pull from localStorage — Kona engine would populate this via API
-      const positions = JSON.parse(localStorage.getItem('kona_open_positions') || '[]');
+      const positions = _cachedPositions;
       const container = document.getElementById('open-positions');
+      if (!container) return;
       if (!positions.length) {
         container.innerHTML = '<div style="color:var(--muted);font-size:13px;">No open positions</div>';
         return;
       }
       container.innerHTML = '';
-      positions.forEach((p, i) => {
+      positions.forEach(p => {
         const pnlClass = (p.pnl || 0) >= 0 ? 'pos' : 'neg';
         const pnlStr = (p.pnl >= 0 ? '+$' : '-$') + Math.abs(p.pnl || 0).toFixed(0);
+        const pctStr = (p.pnl_pct >= 0 ? '+' : '') + (p.pnl_pct || 0).toFixed(1) + '%';
         const row = document.createElement('div');
         row.className = 'open-pos-row';
         row.innerHTML = '<div class="open-pos-info">'
           + '<span class="open-pos-ticker">' + (p.ticker || '?') + '</span>'
-          + '<span class="open-pos-side ' + (p.side || 'long') + '">' + (p.side || 'long') + '</span>'
-          + '<span style="color:var(--muted);font-size:11px;">' + (p.contracts || 1) + 'x @ $' + (p.entry || 0).toFixed(2) + '</span>'
+          + '<span class="open-pos-side ' + (p.side || 'long') + '">' + (p.side || '').toUpperCase() + '</span>'
+          + '<span style="color:var(--muted);font-size:11px;">' + (p.contracts || 1) + 'x @ $' + (p.entry || 0).toFixed(2) + ' → $' + (p.current || 0).toFixed(2) + '</span>'
+          + (p.dte > 0 ? '<span style="color:var(--muted);font-size:10px;margin-left:6px;">DTE:' + p.dte + '</span>' : '')
           + '</div>'
-          + '<span class="open-pos-pnl ' + pnlClass + '">' + pnlStr + '</span>'
-          + '<button class="open-pos-panic" onclick="panicPosition(' + i + ')">🌋 Sell</button>';
+          + '<span class="open-pos-pnl ' + pnlClass + '">' + pnlStr + ' (' + pctStr + ')</span>'
+          + '<button class="open-pos-panic" onclick="panicPosition(\'' + (p.symbol || '') + '\')">🌋 Sell</button>';
         container.appendChild(row);
       });
     }
-    renderOpenPositions();
+    fetchLivePositions();
 
-    function panicPosition(idx) {
-      const positions = JSON.parse(localStorage.getItem('kona_open_positions') || '[]');
-      const pos = positions[idx];
-      if (!pos) return;
-      if (!confirm('🌋 Pele\'s Wrath on ' + pos.ticker + '? This will emergency sell at market.')) return;
-      alert('Emergency sell order sent for ' + pos.ticker + '! (Demo mode — connect Kona engine for live execution)');
+    async function panicPosition(symbol) {
+      if (!symbol) return;
+      if (!confirm('🌋 Pele\'s Wrath on ' + symbol + '? This will emergency sell at market.')) return;
+      try {
+        await fetch('/api/controls', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({force_exits: [symbol]}),
+        });
+        alert('🌋 Force exit sent for ' + symbol + '!');
+        fetchLivePositions();
+      } catch(e) {
+        alert('Failed to send exit — ' + e.message);
+      }
     }
 
     /* ── Waves to Ride (auto-scan on load) ── */
@@ -1972,16 +1977,48 @@
 
     loadPauseState();
 
+    /* ── Engine Status Dot ── */
+    async function pollEngineStatus() {
+      const dot = document.getElementById('engine-dot');
+      if (!dot) return;
+      try {
+        const resp = await fetch('/api/engine-status');
+        if (!resp.ok) { dot.style.background = '#666'; dot.title = 'Unknown'; return; }
+        const s = await resp.json();
+        if (s.engine_running && s.ib_connected && !s.stale) {
+          dot.style.background = 'var(--green)';
+          dot.title = 'Engine running · IB connected';
+        } else if (s.engine_running && !s.stale) {
+          dot.style.background = '#f5a623';
+          dot.title = 'Engine running · IB disconnected';
+        } else {
+          dot.style.background = 'var(--danger)';
+          dot.title = s.stale ? 'Engine stale (no update in 5min)' : 'Engine stopped';
+        }
+      } catch(e) {
+        dot.style.background = '#666';
+        dot.title = 'Cannot reach server';
+      }
+    }
+    pollEngineStatus();
+    setInterval(pollEngineStatus, 30000);
+
+    /* ── Auto-refresh positions + trades every 60s ── */
+    setInterval(() => {
+      fetchLivePositions();
+      fetchLiveTrades();
+    }, 60000);
+
     /* ── King Kam Report Bubble ── */
     function updateReportBubble() {
-      const trades = pnlLoad();
+      const trades = _cachedTrades;
       const body = document.getElementById('kam-report-body');
       if (trades.length === 0) {
         body.innerHTML = '<div style="color:var(--muted)">No trades logged yet</div>';
         return;
       }
       const total = trades.reduce((s, t) => s + t.amt, 0);
-      const recent = trades.slice(-4).reverse();
+      const recent = trades.slice(0, 4);
       let html = '';
       recent.forEach(t => {
         const amtStr = (t.amt >= 0 ? '+$' : '-$') + Math.abs(t.amt).toFixed(2);

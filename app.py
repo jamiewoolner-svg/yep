@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import concurrent.futures
 import copy
+import csv
 import hashlib
 import json
 import logging
@@ -2432,6 +2433,8 @@ def ai_report() -> Response:
 
 # ── Scanner Controls ──────────────────────────────────────────
 CONTROLS_FILE = os.path.join(_DATA_DIR, 'kona_controls.json')
+STATE_FILE = os.path.join(_DATA_DIR, 'kona_state.json')
+TRADE_HISTORY_FILE = os.path.join(_DATA_DIR, 'trade_history.csv')
 JOURNAL_FILE = os.path.join(_DATA_DIR, 'kona_journal.json')
 
 
@@ -2445,8 +2448,10 @@ def _load_controls() -> dict[str, Any]:
 
 def _save_controls(controls: dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(CONTROLS_FILE), exist_ok=True)
-    with open(CONTROLS_FILE, 'w') as f:
+    tmp = CONTROLS_FILE + '.tmp'
+    with open(tmp, 'w') as f:
         json.dump(controls, f, indent=2)
+    os.replace(tmp, CONTROLS_FILE)
 
 
 @app.route("/api/controls", methods=["GET", "POST"])
@@ -2456,8 +2461,15 @@ def api_controls() -> Response:
         return jsonify(_load_controls())
     data = request.get_json(silent=True) or {}
     controls = _load_controls()
-    if 'paused' in data:
-        controls['paused'] = bool(data['paused'])
+    for key in ('paused', 'entries_paused'):
+        if key in data:
+            controls[key] = bool(data[key])
+    if 'risk_mode' in data and data['risk_mode'] in ('normal', 'risk_off', 'reduced'):
+        controls['risk_mode'] = data['risk_mode']
+    if 'force_exits' in data and isinstance(data['force_exits'], list):
+        controls['force_exits'] = data['force_exits']
+    if 'force_exit_all' in data:
+        controls['force_exit_all'] = bool(data['force_exit_all'])
     _save_controls(controls)
     return jsonify(controls)
 
@@ -2465,18 +2477,133 @@ def api_controls() -> Response:
 @app.route("/api/panic-clear", methods=["POST"])
 @require_auth
 def api_panic_clear() -> Response:
-    # Clear caches
+    # Clear webapp caches
     with _CHART_CACHE_LOCK:
         _CHART_CACHE.clear()
     with _SCAN_SNAPSHOT_LOCK:
         _SCAN_SNAPSHOT_CACHE.clear()
     with _EVENT_CACHE_LOCK:
         _EVENT_CACHE.clear()
-    # Pause scanner
+    # Write real panic flags to engine controls
     controls = _load_controls()
     controls['paused'] = True
+    controls['entries_paused'] = True
+    controls['risk_mode'] = 'risk_off'
+    controls['force_exit_all'] = True
     _save_controls(controls)
-    return jsonify({'ok': True, 'message': 'All caches cleared, scanner paused'})
+    return jsonify({'ok': True, 'message': 'PANIC: entries paused, risk_off, force_exit_all sent'})
+
+
+# ── Live Engine Data Endpoints ───────────────────────────────
+
+def _load_state() -> dict:
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+@app.route("/api/positions")
+@require_auth
+def api_positions() -> Response:
+    """Live open positions from kona_state.json."""
+    state = _load_state()
+    positions = state.get('positions', {})
+    result = []
+    for sym, pos in positions.items():
+        entry = pos.get('avg_entry', 0)
+        current = pos.get('current_price', entry)
+        contracts = pos.get('contracts', 0)
+        pnl = (current - entry) * contracts * 100
+        pnl_pct = ((current - entry) / entry * 100) if entry > 0 else 0
+        dte = 0
+        if pos.get('expiry'):
+            try:
+                dte = (datetime.strptime(pos['expiry'], '%Y-%m-%d') - datetime.now()).days
+            except ValueError:
+                pass
+        result.append({
+            'symbol': sym,
+            'ticker': pos.get('ticker', sym),
+            'side': pos.get('side', '?'),
+            'contracts': contracts,
+            'entry': entry,
+            'current': current,
+            'pnl': round(pnl, 2),
+            'pnl_pct': round(pnl_pct, 2),
+            'expiry': pos.get('expiry', ''),
+            'dte': dte,
+            'state': pos.get('state', ''),
+            'entry_date': pos.get('entry_date', ''),
+        })
+    return jsonify({'positions': result})
+
+
+@app.route("/api/trades")
+@require_auth
+def api_trades() -> Response:
+    """Completed trades from trade_history.csv."""
+    trades = []
+    try:
+        if os.path.exists(TRADE_HISTORY_FILE):
+            with open(TRADE_HISTORY_FILE) as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    trades.append(row)
+    except Exception as ex:
+        _log.warning("Failed to read trade_history.csv: %s", ex)
+    # Return last 50 trades, newest first
+    trades = trades[-50:]
+    trades.reverse()
+    result = []
+    for t in trades:
+        try:
+            pnl = float(t.get('net_pnl', 0))
+            pnl_pct = float(t.get('pnl_pct', 0))
+        except (ValueError, TypeError):
+            pnl, pnl_pct = 0, 0
+        result.append({
+            'date': t.get('signal_date', t.get('date', '')),
+            'ticker': t.get('ticker', ''),
+            'side': t.get('side', ''),
+            'exit_type': t.get('exit_type', ''),
+            'hold_days': t.get('hold_cal_days', ''),
+            'pnl': pnl,
+            'pnl_pct': pnl_pct,
+            'entry_price': t.get('entry_price', t.get('avg_entry', '')),
+            'exit_price': t.get('exit_price', ''),
+        })
+    return jsonify({'trades': result})
+
+
+@app.route("/api/engine-status")
+@require_auth
+def api_engine_status() -> Response:
+    """Engine health from kona_state.json."""
+    state = _load_state()
+    controls = _load_controls()
+    # Check if state file is stale (no update in 5 minutes)
+    stale = False
+    last_update = state.get('last_update', '')
+    if last_update:
+        try:
+            lu = datetime.fromisoformat(last_update)
+            stale = (datetime.now() - lu).total_seconds() > 300
+        except ValueError:
+            stale = True
+    return jsonify({
+        'engine_running': state.get('engine_running', False),
+        'ib_connected': state.get('ib_connected', False),
+        'ws_connected': state.get('ws_connected', False),
+        'available_capital': state.get('available_capital', 0),
+        'total_capital': state.get('total_capital', 0),
+        'open_positions': len(state.get('positions', {})),
+        'risk_mode': controls.get('risk_mode', 'normal'),
+        'entries_paused': controls.get('entries_paused', False),
+        'stale': stale,
+        'last_update': last_update,
+    })
 
 
 # ── Trade Journal ─────────────────────────────────────────────

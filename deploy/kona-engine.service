@@ -1,0 +1,15 @@
+[Unit]
+Description=Kona v56 Options Trading Engine (IB Connected)
+After=network.target
+
+[Service]
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/kona_aws
+EnvironmentFile=/home/ec2-user/kona_aws/.env
+ExecStart=/usr/bin/python3 /home/ec2-user/kona_aws/kailua_kona.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
