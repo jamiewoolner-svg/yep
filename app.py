@@ -82,7 +82,7 @@ RP_ID = os.environ.get('BI_RP_ID', 'localhost')
 RP_NAME = 'Big Island'
 USER_ID = b'kona-trader-01'
 USER_NAME = os.environ.get('BI_USER', 'jamie')
-APP_ENV = os.environ.get('APP_ENV', 'paper')
+APP_ENV = os.environ.get('APP_ENV', 'live')
 _DATA_DIR = os.environ.get('KONA_STATE_DIR', '') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 CRED_FILE = os.path.join(_DATA_DIR, 'bi_credentials.json')
 MAX_FACE_ATTEMPTS = 3
@@ -2412,7 +2412,8 @@ def _build_king_kam_snapshot() -> dict:
         'account': {
             'balance': balance,
             'open_position_count': len(positions),
-            'env': state.get('account', 'unknown'),
+            'env': APP_ENV,
+            'account_id': state.get('account', 'unknown'),
         },
         'positions': positions,
         'recent_trades': closed[-10:] if closed else [],
@@ -2462,7 +2463,8 @@ def _snapshot_to_context(snap: dict) -> str:
     lines = [f"LIVE DATA (as of {snap.get('updated_at', 'unknown')}):"]
 
     acct = snap.get('account', {})
-    lines.append(f"Account: ${acct.get('balance', 0):,.0f} | {acct.get('open_position_count', 0)} open positions | env={acct.get('env', '?')}")
+    env_label = "LIVE TRADING" if acct.get('env') == 'live' else acct.get('env', '?')
+    lines.append(f"Account: ${acct.get('balance', 0):,.0f} | {acct.get('open_position_count', 0)} open positions | {env_label} ({acct.get('account_id', '')})")
 
     ctrl = snap.get('controls', {})
     if ctrl.get('entries_paused') or ctrl.get('paused'):

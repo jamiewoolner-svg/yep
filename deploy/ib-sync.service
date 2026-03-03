@@ -1,0 +1,15 @@
+[Unit]
+Description=IB Account Sync (pulls live data from IB Gateway)
+After=network.target
+
+[Service]
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/bigisland
+EnvironmentFile=/home/ec2-user/bigisland/.env
+ExecStart=/usr/bin/python3 scripts/ib_sync.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
