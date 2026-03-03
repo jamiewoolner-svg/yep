@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-King Kam Daily Market Briefing — emailed via GitHub Actions.
+King Kam Daily Market Briefing — runs via cron on EC2.
 
-Runs the Kona v56 watchlist scanner, feeds results to King Kam (Claude),
-and emails the Hawaiian Pidgin market briefing to the configured recipient.
+Reads live Kona engine data (positions, trades, controls), runs watchlist
+scan, feeds everything to King Kam (Claude), and emails the briefing.
 
-Schedule (GitHub Actions cron, UTC → ET):
-  14:00 UTC = 9 AM ET   — pre-market briefing
-  17:00 UTC = 12 PM ET  — midday check-in
-  20:00 UTC = 3 PM ET   — afternoon wrap-up
+Schedule (cron, Pacific Time):
+  6:00 AM PT  — pre-market briefing
+  1:00 PM PT  — midday wrap-up
 """
 
 import os
@@ -33,6 +32,67 @@ SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 FROM_EMAIL = os.environ.get("FROM_EMAIL", "")
 TO_EMAIL = os.environ.get("TO_EMAIL", "")
+KONA_STATE_DIR = os.environ.get("KONA_STATE_DIR", "")
+
+
+def load_kona_live_data() -> str:
+    """Read live positions, trades, and controls from Kona state files."""
+    if not KONA_STATE_DIR or not os.path.isdir(KONA_STATE_DIR):
+        return ""
+
+    sections = []
+
+    # Positions + balance
+    state_path = os.path.join(KONA_STATE_DIR, "kona_state.json")
+    if os.path.exists(state_path):
+        try:
+            with open(state_path) as f:
+                state = json.load(f)
+            balance = state.get("balance", state.get("available_capital", "?"))
+            sections.append(f"Account Balance: ${balance:,.0f}" if isinstance(balance, (int, float)) else f"Account Balance: {balance}")
+
+            positions = state.get("open_positions", state.get("positions", {}))
+            if positions:
+                lines = ["Open Positions:"]
+                items = positions.values() if isinstance(positions, dict) else positions
+                for p in items:
+                    ticker = p.get("ticker", p.get("symbol", "?"))
+                    side = p.get("side", "?")
+                    entry = p.get("avg_entry", p.get("entry_price", p.get("entry", "?")))
+                    current = p.get("current_price", p.get("mark", "?"))
+                    contracts = p.get("contracts", p.get("qty", "?"))
+                    lines.append(f"  {ticker} {side} x{contracts} — entry ${entry}, current ${current}")
+                sections.append("\n".join(lines))
+            else:
+                sections.append("Open Positions: None")
+
+            # Recent closed trades
+            closed = state.get("closed_trades", [])
+            if closed:
+                recent = closed[-5:]
+                lines = ["Recent Closed Trades:"]
+                for t in recent:
+                    ticker = t.get("ticker", t.get("symbol", "?"))
+                    pnl = t.get("net_pnl", t.get("pnl", "?"))
+                    side = t.get("side", "?")
+                    lines.append(f"  {ticker} {side} — P&L: ${pnl}")
+                sections.append("\n".join(lines))
+        except Exception as e:
+            log.warning(f"Could not read kona_state.json: {e}")
+
+    # Controls
+    controls_path = os.path.join(KONA_STATE_DIR, "kona_controls.json")
+    if os.path.exists(controls_path):
+        try:
+            with open(controls_path) as f:
+                controls = json.load(f)
+            paused = controls.get("paused", False)
+            risk = controls.get("risk_mode", "normal")
+            sections.append(f"Engine: {'PAUSED' if paused else 'Active'}, Risk Mode: {risk}")
+        except Exception:
+            pass
+
+    return "\n".join(sections) if sections else ""
 
 
 def fetch_sp500_tickers() -> list[str]:
@@ -90,33 +150,45 @@ def format_scan_text(watchlist: list[dict]) -> str:
 
 def get_time_label() -> str:
     """Return a human-friendly label for the current scan time."""
-    hour = datetime.utcnow().hour
-    if hour <= 15:
+    try:
+        from zoneinfo import ZoneInfo
+        pt_hour = datetime.now(ZoneInfo("America/Los_Angeles")).hour
+    except Exception:
+        pt_hour = (datetime.utcnow().hour - 8) % 24
+    if pt_hour < 10:
         return "Pre-Market Morning"
-    elif hour <= 18:
-        return "Midday"
     else:
-        return "Afternoon Wrap-Up"
+        return "Midday"
 
 
-def ask_king_kam(scan_text: str, time_label: str) -> str:
+def ask_king_kam(scan_text: str, time_label: str, live_data: str = "") -> str:
     """Ask King Kam to write the market briefing."""
     if not ANTHROPIC_API_KEY:
-        return f"King Kam Briefing (no AI key — raw scan)\n\n{scan_text}"
+        return f"King Kam Briefing (no AI key — raw scan)\n\n{live_data}\n\n{scan_text}"
+
+    live_section = ""
+    if live_data:
+        live_section = f"""
+Here is the live Kona engine portfolio data:
+
+{live_data}
+
+"""
 
     prompt = f"""Write a short market briefing email in your King Kam Hawaiian Pidgin style.
 
 Time: {time_label} — {datetime.utcnow().strftime('%A, %B %d %Y')}
-
+{live_section}
 Here are today's watchlist scan results from the Kona v56 engine:
 
 {scan_text}
 
 Write the briefing covering:
 1. Quick market vibe (1-2 sentences)
-2. Top setups approaching signals and why they look interesting
-3. Any warnings (earnings blocks, strict filter fails)
-4. One piece of historical market wisdom
+2. Current portfolio — open positions, how they look, any concerns
+3. Top setups approaching signals and why they look interesting
+4. Any warnings (earnings blocks, strict filter fails)
+5. One piece of historical market wisdom
 
 Keep it 3-5 short paragraphs. Sign off as King Kam. Use Hawaiian Pidgin naturally.
 Do NOT give specific buy/sell advice — just context and color."""
@@ -192,6 +264,13 @@ def main():
     time_label = get_time_label()
     log.info(f"King Kam {time_label} Briefing — scanning...")
 
+    # Load live Kona data if available
+    live_data = load_kona_live_data()
+    if live_data:
+        log.info("Loaded live Kona engine data")
+    else:
+        log.info("No live Kona data available (KONA_STATE_DIR not set or empty)")
+
     # Get tickers and scan
     tickers = fetch_sp500_tickers()
     log.info(f"Scanning {len(tickers)} tickers...")
@@ -203,7 +282,7 @@ def main():
 
     # Get King Kam's briefing
     log.info("Asking King Kam to write the briefing...")
-    briefing = ask_king_kam(scan_text, time_label)
+    briefing = ask_king_kam(scan_text, time_label, live_data)
 
     # Send email
     today = datetime.utcnow().strftime("%b %d")
