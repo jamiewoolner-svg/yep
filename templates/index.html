@@ -407,31 +407,29 @@
     /* Speech bubble next to FAB */
     .kam-speech {
       position: fixed;
-      bottom: 110px;
-      right: 160px;
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: 12px 12px 12px 4px;
-      padding: 10px 14px;
+      padding: 8px 12px;
       font-size: 12px;
       color: var(--ink);
       z-index: 199;
-      max-width: 220px;
-      line-height: 1.5;
+      max-width: 180px;
+      line-height: 1.4;
       box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-      animation: kam-speech-fade 0.3s ease;
+      pointer-events: none;
+      white-space: normal;
+    }
+    .kam-speech.flip {
+      border-radius: 12px 12px 4px 12px;
     }
     .kam-speech .speech-market { color: var(--gold); }
     .kam-speech .speech-folio { color: var(--muted); font-size: 11px; }
-    @keyframes kam-speech-fade {
-      from { opacity: 0; transform: translateY(8px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
     @media (max-width: 500px) {
       .kam-panel { width: 100%; border-radius: 16px 16px 0 0; }
       .kam-fab { bottom: 16px; right: 16px; width: 90px; height: 90px; }
       .kam-emoji { font-size: 16px; }
-      .kam-speech { display: none; }
+      .kam-speech { max-width: 150px; font-size: 11px; }
     }
     .kam-header {
       display: flex;
@@ -1564,15 +1562,53 @@
       const fol = document.getElementById('speech-folio');
       if (mkt) { marketIdx = (marketIdx + 1) % marketVibes.length; mkt.textContent = marketVibes[marketIdx]; }
       if (fol) fol.textContent = getPortfolioVibe();
+      positionSpeechBubble();
     }
+
+    function positionSpeechBubble() {
+      const fab = document.getElementById('kam-fab');
+      const speech = document.getElementById('kam-speech');
+      if (!fab || !speech || speech.style.display === 'none') return;
+      const fr = fab.getBoundingClientRect();
+      const sw = speech.offsetWidth || 150;
+      const sh = speech.offsetHeight || 50;
+      const gap = 6;
+      const fabCX = fr.left + fr.width / 2;
+      // Bubble top: align bottom of bubble near top-center of FAB
+      var top = fr.top - sh - gap;
+      if (top < 4) top = fr.bottom + gap; // flip below if no room above
+      var left;
+      if (fabCX > window.innerWidth * 0.75) {
+        // FAB on right — bubble to the left, tail points right-down
+        left = fr.left - sw - gap;
+        if (left < 4) left = 4;
+        speech.classList.remove('flip');
+      } else {
+        // FAB on left — bubble to the right, tail points left-down
+        left = fr.right + gap;
+        if (left + sw > window.innerWidth - 4) left = window.innerWidth - sw - 4;
+        speech.classList.add('flip');
+      }
+      speech.style.left = left + 'px';
+      speech.style.top = top + 'px';
+      speech.style.right = 'auto';
+      speech.style.bottom = 'auto';
+    }
+
     updateSpeechBubble();
     setInterval(updateSpeechBubble, 10000);
+    window.addEventListener('resize', positionSpeechBubble);
+    // Position once FAB is rendered
+    requestAnimationFrame(positionSpeechBubble);
 
     function toggleKam() {
       kamOpen = !kamOpen;
       document.getElementById('kam-panel').classList.toggle('open', kamOpen);
       const speech = document.getElementById('kam-speech');
-      if (speech) speech.style.display = kamOpen ? 'none' : 'block';
+      if (speech) {
+        speech.style.display = kamOpen ? 'none' : 'block';
+        if (!kamOpen) requestAnimationFrame(positionSpeechBubble);
+      }
       if (kamOpen) document.getElementById('kam-input').focus();
     }
 
@@ -1670,6 +1706,7 @@
         fab.style.top = newY + 'px';
         fab.style.right = 'auto';
         fab.style.bottom = 'auto';
+        positionSpeechBubble();
       }
 
       function onEnd() {
@@ -1681,6 +1718,8 @@
         if (rect.left > window.innerWidth - 30) {
           fab.style.display = 'none';
           pullback.style.display = 'flex';
+          const speech = document.getElementById('kam-speech');
+          if (speech) speech.style.display = 'none';
           const report = document.getElementById('kam-report');
           if (report) report.style.display = 'none';
         } else if (wasDragged) {
@@ -1691,6 +1730,7 @@
           fab.style.top = clampY + 'px';
           fab.style.right = 'auto';
           fab.style.bottom = 'auto';
+          setTimeout(positionSpeechBubble, 350); // after transition settles
         }
       }
 
@@ -1719,6 +1759,8 @@
       pullback.style.display = 'none';
       const report = document.getElementById('kam-report');
       if (report) report.style.display = '';
+      const speech = document.getElementById('kam-speech');
+      if (speech && !kamOpen) { speech.style.display = 'block'; requestAnimationFrame(positionSpeechBubble); }
     }
 
     /* ── Tab switching ── */
