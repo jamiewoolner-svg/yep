@@ -2495,10 +2495,25 @@ def api_panic_clear() -> Response:
 
 
 # ── Live Engine Data Endpoints ───────────────────────────────
+# Kona state file format (v2):
+#   balance, open_positions (dict), closed_trades (list),
+#   last_run_utc, account, streak_losses, cooldown_until_date
+# Also reads kona_trades.json for daily snapshot
+
+TRADES_JSON_FILE = os.path.join(_DATA_DIR, 'kona_trades.json')
+
 
 def _load_state() -> dict:
     try:
         with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _load_trades_json() -> dict:
+    try:
+        with open(TRADES_JSON_FILE) as f:
             return json.load(f)
     except Exception:
         return {}
@@ -2509,33 +2524,42 @@ def _load_state() -> dict:
 def api_positions() -> Response:
     """Live open positions from kona_state.json."""
     state = _load_state()
-    positions = state.get('positions', {})
+    # Handle both formats: state v2 uses 'open_positions', older uses 'positions'
+    positions = state.get('open_positions', state.get('positions', {}))
+    # positions can be dict (keyed by symbol) or list
+    if isinstance(positions, list):
+        pos_items = [(p.get('symbol', p.get('ticker', f'pos_{i}')), p) for i, p in enumerate(positions)]
+    elif isinstance(positions, dict):
+        pos_items = list(positions.items())
+    else:
+        pos_items = []
     result = []
-    for sym, pos in positions.items():
-        entry = pos.get('avg_entry', 0)
-        current = pos.get('current_price', entry)
-        contracts = pos.get('contracts', 0)
+    for sym, pos in pos_items:
+        entry = float(pos.get('avg_entry', pos.get('entry_price', pos.get('entry', 0))))
+        current = float(pos.get('current_price', pos.get('mark', entry)))
+        contracts = int(pos.get('contracts', pos.get('qty', 1)))
         pnl = (current - entry) * contracts * 100
         pnl_pct = ((current - entry) / entry * 100) if entry > 0 else 0
         dte = 0
-        if pos.get('expiry'):
+        expiry = pos.get('expiry', pos.get('expiration', ''))
+        if expiry:
             try:
-                dte = (datetime.strptime(pos['expiry'], '%Y-%m-%d') - datetime.now()).days
+                dte = (datetime.strptime(str(expiry)[:10], '%Y-%m-%d') - datetime.now()).days
             except ValueError:
                 pass
         result.append({
             'symbol': sym,
-            'ticker': pos.get('ticker', sym),
-            'side': pos.get('side', '?'),
+            'ticker': pos.get('ticker', sym.split('_')[0] if '_' in str(sym) else sym),
+            'side': pos.get('side', pos.get('direction', '?')),
             'contracts': contracts,
             'entry': entry,
             'current': current,
             'pnl': round(pnl, 2),
             'pnl_pct': round(pnl_pct, 2),
-            'expiry': pos.get('expiry', ''),
+            'expiry': str(expiry)[:10] if expiry else '',
             'dte': dte,
-            'state': pos.get('state', ''),
-            'entry_date': pos.get('entry_date', ''),
+            'state': pos.get('state', pos.get('status', '')),
+            'entry_date': pos.get('entry_date', pos.get('open_date', '')),
         })
     return jsonify({'positions': result})
 
@@ -2543,32 +2567,46 @@ def api_positions() -> Response:
 @app.route("/api/trades")
 @require_auth
 def api_trades() -> Response:
-    """Completed trades from trade_history.csv."""
-    trades = []
-    try:
-        if os.path.exists(TRADE_HISTORY_FILE):
-            with open(TRADE_HISTORY_FILE) as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    trades.append(row)
-    except Exception as ex:
-        _log.warning("Failed to read trade_history.csv: %s", ex)
+    """Completed trades from kona_state.json closed_trades or trade_history.csv."""
+    trades: list[dict] = []
+    # Try kona_state.json closed_trades first
+    state = _load_state()
+    closed = state.get('closed_trades', [])
+    if closed:
+        trades = closed
+    # Also try kona_trades.json
+    if not trades:
+        tj = _load_trades_json()
+        trades = tj.get('closed_trades', [])
+    # Fallback to trade_history.csv
+    if not trades:
+        try:
+            if os.path.exists(TRADE_HISTORY_FILE):
+                with open(TRADE_HISTORY_FILE) as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        trades.append(row)
+        except Exception as ex:
+            _log.warning("Failed to read trade_history.csv: %s", ex)
     # Return last 50 trades, newest first
     trades = trades[-50:]
     trades.reverse()
     result = []
     for t in trades:
         try:
-            pnl = float(t.get('net_pnl', 0))
-            pnl_pct = float(t.get('pnl_pct', 0))
+            pnl = float(t.get('net_pnl', t.get('pnl', t.get('profit', 0))))
         except (ValueError, TypeError):
-            pnl, pnl_pct = 0, 0
+            pnl = 0
+        try:
+            pnl_pct = float(t.get('pnl_pct', t.get('return_pct', 0)))
+        except (ValueError, TypeError):
+            pnl_pct = 0
         result.append({
-            'date': t.get('signal_date', t.get('date', '')),
-            'ticker': t.get('ticker', ''),
-            'side': t.get('side', ''),
-            'exit_type': t.get('exit_type', ''),
-            'hold_days': t.get('hold_cal_days', ''),
+            'date': t.get('signal_date', t.get('date', t.get('close_date', t.get('exit_date', '')))),
+            'ticker': t.get('ticker', t.get('symbol', '')),
+            'side': t.get('side', t.get('direction', '')),
+            'exit_type': t.get('exit_type', t.get('exit_reason', '')),
+            'hold_days': t.get('hold_cal_days', t.get('hold_days', '')),
             'pnl': pnl,
             'pnl_pct': pnl_pct,
             'entry_price': t.get('entry_price', t.get('avg_entry', '')),
@@ -2584,25 +2622,31 @@ def api_engine_status() -> Response:
     state = _load_state()
     controls = _load_controls()
     # Check if state file is stale (no update in 5 minutes)
-    stale = False
-    last_update = state.get('last_update', '')
+    stale = True
+    last_update = state.get('last_run_utc', state.get('last_update', ''))
     if last_update:
         try:
-            lu = datetime.fromisoformat(last_update)
-            stale = (datetime.now() - lu).total_seconds() > 300
+            lu_str = str(last_update).replace('Z', '+00:00')
+            lu = datetime.fromisoformat(lu_str).replace(tzinfo=None)
+            stale = (datetime.utcnow() - lu).total_seconds() > 300
         except ValueError:
             stale = True
+    has_state = bool(state)
+    balance = float(state.get('balance', state.get('available_capital', 0)))
+    positions = state.get('open_positions', state.get('positions', {}))
+    n_positions = len(positions) if isinstance(positions, (dict, list)) else 0
     return jsonify({
-        'engine_running': state.get('engine_running', False),
-        'ib_connected': state.get('ib_connected', False),
-        'ws_connected': state.get('ws_connected', False),
-        'available_capital': state.get('available_capital', 0),
-        'total_capital': state.get('total_capital', 0),
-        'open_positions': len(state.get('positions', {})),
+        'engine_running': has_state and not stale,
+        'ib_connected': has_state and not stale,
+        'ws_connected': has_state,
+        'available_capital': balance,
+        'total_capital': float(state.get('total_capital', balance)),
+        'open_positions': n_positions,
         'risk_mode': controls.get('risk_mode', 'normal'),
         'entries_paused': controls.get('entries_paused', False),
         'stale': stale,
         'last_update': last_update,
+        'account': state.get('account', 'unknown'),
     })
 
 

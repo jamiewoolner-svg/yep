@@ -7,7 +7,7 @@ User=ec2-user
 Group=ec2-user
 WorkingDirectory=/home/ec2-user/bigisland
 EnvironmentFile=/home/ec2-user/bigisland/.env
-ExecStart=/usr/local/bin/gunicorn wsgi:app --bind 127.0.0.1:8001 --workers 1 --threads 4 --timeout 300
+ExecStart=/home/ec2-user/.local/bin/gunicorn wsgi:app --bind 127.0.0.1:8001 --workers 1 --threads 4 --timeout 300
 Restart=always
 RestartSec=5
 
