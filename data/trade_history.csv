@@ -1,0 +1,12 @@
+signal_date,ticker,side,exit_type,hold_cal_days,net_pnl,pnl_pct,entry_price,exit_price
+2026-02-10,AMZN,call,profit_target,5,620,12.4,5.00,5.62
+2026-02-12,TSLA,put,stop_above_start,3,-180,-9.0,2.00,1.82
+2026-02-14,GOOGL,call,profit_target,7,450,15.0,3.00,3.45
+2026-02-17,META,call,time_decay_exit,10,-95,-4.8,2.00,1.90
+2026-02-19,AMD,put,profit_target,4,380,19.0,2.00,2.38
+2026-02-21,NFLX,call,stop_below_start,2,-220,-11.0,2.00,1.78
+2026-02-24,NVDA,put,profit_target,6,850,17.0,5.00,5.85
+2026-02-25,CRM,call,profit_target,3,310,10.3,3.00,3.31
+2026-02-26,AAPL,call,trailing_stop,8,175,5.8,3.00,3.18
+2026-02-27,MSFT,put,early_loss_exit,1,-140,-7.0,2.00,1.86
+2026-02-28,BA,call,profit_target,5,520,13.0,4.00,4.52

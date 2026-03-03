@@ -2380,10 +2380,11 @@ def _build_king_kam_snapshot() -> dict:
             current = float(p.get('current_price', p.get('mark', entry)))
             contracts = int(p.get('contracts', p.get('qty', 1)))
             pnl = (current - entry) * contracts * 100
-            positions.append({
+            pos_info = {
                 'ticker': p.get('ticker', sym.split('_')[0] if '_' in str(sym) else sym),
                 'side': p.get('side', '?'),
                 'contracts': contracts,
+                'strike': p.get('strike', 0),
                 'cost_basis': round(entry * contracts * 100, 2),
                 'current_value': round(current * contracts * 100, 2),
                 'unrealized_pnl': round(pnl, 2),
@@ -2391,7 +2392,14 @@ def _build_king_kam_snapshot() -> dict:
                 'entry_date': p.get('entry_date', ''),
                 'expiry': str(p.get('expiry', ''))[:10],
                 'state': p.get('state', ''),
-            })
+                'bid': p.get('bid'),
+                'ask': p.get('ask'),
+                'spread': p.get('spread'),
+                'volume': p.get('volume'),
+            }
+            if p.get('greeks'):
+                pos_info['greeks'] = p['greeks']
+            positions.append(pos_info)
     elif isinstance(raw_pos, list):
         for p in raw_pos:
             positions.append(p)
@@ -2411,12 +2419,23 @@ def _build_king_kam_snapshot() -> dict:
         'engine_status': 'running' if state and last_update else 'unknown',
         'account': {
             'balance': balance,
+            'cash': float(state.get('cash', 0)),
+            'buying_power': float(state.get('buying_power', 0)),
+            'position_value': float(state.get('position_value', 0)),
+            'maintenance_margin': float(state.get('maintenance_margin', 0)),
+            'daily_pnl': float(state.get('daily_pnl', 0)),
+            'unrealized_pnl': float(state.get('unrealized_pnl', 0)),
+            'realized_pnl': float(state.get('realized_pnl', 0)),
             'open_position_count': len(positions),
             'env': APP_ENV,
             'account_id': state.get('account', 'unknown'),
+            'ib_connected': state.get('ib_connected', False),
         },
         'positions': positions,
         'recent_trades': closed[-10:] if closed else [],
+        'market': state.get('market', {}),
+        'recent_executions': state.get('recent_executions', [])[-10:],
+        'open_orders': state.get('open_orders', []),
         'controls': {
             'risk_mode': controls.get('risk_mode', 'normal'),
             'entries_paused': controls.get('entries_paused', False),
@@ -2457,29 +2476,88 @@ def _load_king_kam_snapshot() -> dict | None:
 
 
 def _snapshot_to_context(snap: dict) -> str:
-    """Format snapshot as text context for King Kam system prompt."""
+    """Format snapshot as comprehensive text context for King Kam."""
     if not snap:
         return ""
     lines = [f"LIVE DATA (as of {snap.get('updated_at', 'unknown')}):"]
 
+    # ── Account Overview ──
     acct = snap.get('account', {})
     env_label = "LIVE TRADING" if acct.get('env') == 'live' else acct.get('env', '?')
-    lines.append(f"Account: ${acct.get('balance', 0):,.0f} | {acct.get('open_position_count', 0)} open positions | {env_label} ({acct.get('account_id', '')})")
+    ib_status = "CONNECTED" if acct.get('ib_connected') else "DISCONNECTED"
+    lines.append(f"Account: {acct.get('account_id', '?')} | {env_label} | IB {ib_status}")
+    lines.append(f"  Net Liquidation: ${acct.get('balance', 0):,.2f}")
+    lines.append(f"  Cash: ${acct.get('cash', 0):,.2f} | Buying Power: ${acct.get('buying_power', 0):,.2f}")
+    lines.append(f"  Position Value: ${acct.get('position_value', 0):,.2f} | Margin Used: ${acct.get('maintenance_margin', 0):,.2f}")
 
+    daily = acct.get('daily_pnl', 0)
+    unreal = acct.get('unrealized_pnl', 0)
+    real = acct.get('realized_pnl', 0)
+    if daily or unreal or real:
+        lines.append(f"  Daily P&L: ${daily:+,.2f} | Unrealized: ${unreal:+,.2f} | Realized: ${real:+,.2f}")
+
+    # ── Controls ──
     ctrl = snap.get('controls', {})
     if ctrl.get('entries_paused') or ctrl.get('paused'):
-        lines.append(f"!! PAUSED: entries_paused={ctrl.get('entries_paused')}, risk_mode={ctrl.get('risk_mode')}")
+        lines.append(f"\n!! ENGINE PAUSED: entries_paused={ctrl.get('entries_paused')}, risk_mode={ctrl.get('risk_mode')}")
     else:
-        lines.append(f"Risk mode: {ctrl.get('risk_mode', 'normal')}")
+        lines.append(f"\nEngine active | Risk mode: {ctrl.get('risk_mode', 'normal')}")
 
+    # ── Market Benchmarks ──
+    market = snap.get('market', {})
+    if market:
+        lines.append("\nMARKET BENCHMARKS:")
+        for sym in ("SPY", "QQQ", "VIX", "DIA", "IWM"):
+            m = market.get(sym)
+            if m and m.get('last'):
+                ch = m.get('change_pct', 0)
+                arrow = "+" if ch >= 0 else ""
+                hi = f" H={m['high']}" if m.get('high') else ""
+                lo = f" L={m['low']}" if m.get('low') else ""
+                vol = f" vol={m['volume']:,}" if m.get('volume') else ""
+                lines.append(f"  {sym}: ${m['last']:,.2f} ({arrow}{ch:.2f}%){hi}{lo}{vol}")
+
+    # ── Open Positions ──
     positions = snap.get('positions', [])
+    lines.append(f"\nOPEN POSITIONS ({len(positions)}):")
     if positions:
-        lines.append(f"\nOPEN POSITIONS ({len(positions)}):")
         for p in positions:
-            lines.append(f"  {p.get('ticker','?')} {p.get('side','?')} {p.get('contracts',0)}x "
-                         f"P&L=${p.get('unrealized_pnl',0):+,.0f} ({p.get('unrealized_pnl_pct',0):+.1f}%) "
-                         f"exp={p.get('expiry','')} {p.get('state','')}")
+            strike_str = f" ${p['strike']}" if p.get('strike') else ""
+            spread_str = f" spread=${p['spread']:.2f}" if p.get('spread') else ""
+            vol_str = f" vol={p['volume']}" if p.get('volume') else ""
+            line = (f"  {p.get('ticker','?')} {p.get('side','?')}{strike_str} {p.get('contracts',0)}x "
+                    f"@ ${p.get('current_value',0)/max(p.get('contracts',1),1)/100:.2f} "
+                    f"P&L=${p.get('unrealized_pnl',0):+,.0f} ({p.get('unrealized_pnl_pct',0):+.1f}%) "
+                    f"exp={p.get('expiry','')}{spread_str}{vol_str}")
+            lines.append(line)
+            # Greeks
+            g = p.get('greeks', {})
+            if g and g.get('delta') is not None:
+                lines.append(f"    Greeks: delta={g['delta']:.3f} gamma={g.get('gamma',0):.4f} "
+                             f"theta={g.get('theta',0):.3f} vega={g.get('vega',0):.3f} IV={g.get('iv',0):.1f}%")
+    else:
+        lines.append("  None — flat (all cash)")
 
+    # ── Open Orders ──
+    orders = snap.get('open_orders', [])
+    if orders:
+        lines.append(f"\nOPEN ORDERS ({len(orders)}):")
+        for o in orders:
+            lmt = f" @ ${o['limit_price']:.2f}" if o.get('limit_price') else ""
+            lines.append(f"  {o.get('action','?')} {o.get('qty',0)}x {o.get('order_type','?')}{lmt} [{o.get('status','')}]")
+
+    # ── Recent Executions ──
+    execs = snap.get('recent_executions', [])
+    if execs:
+        lines.append(f"\nRECENT FILLS ({len(execs)}):")
+        for x in execs[-5:]:
+            side = "BUY" if x.get('side') == 'BOT' else "SELL"
+            rpnl = f" realized=${x['realized_pnl']:+,.0f}" if x.get('realized_pnl') else ""
+            comm = f" comm=${x['commission']:.2f}" if x.get('commission') else ""
+            lines.append(f"  {x.get('time','')} {side} {x.get('qty',0)}x {x.get('ticker','?')} "
+                         f"@ ${x.get('price',0):.2f}{rpnl}{comm}")
+
+    # ── Closed Trades ──
     trades = snap.get('recent_trades', [])
     if trades:
         lines.append(f"\nRECENT CLOSED TRADES ({len(trades)}):")
@@ -2487,16 +2565,17 @@ def _snapshot_to_context(snap: dict) -> str:
             pnl = t.get('net_pnl', t.get('pnl', 0))
             lines.append(f"  {t.get('ticker','?')} {t.get('side','?')} P&L=${float(pnl):+,.0f} exit={t.get('exit_type','?')}")
 
+    # ── News ──
     news = snap.get('news', {})
     market_news = news.get('market', [])
     if market_news:
         lines.append("\nMARKET NEWS:")
-        for n in market_news[:3]:
+        for n in market_news[:5]:
             lines.append(f"  [{n.get('source','')}] {n.get('headline','')}")
     pos_news = news.get('positions', [])
     if pos_news:
         lines.append("\nPOSITION NEWS:")
-        for n in pos_news[:3]:
+        for n in pos_news[:5]:
             lines.append(f"  [{n.get('ticker','')}] {n.get('headline','')}")
 
     return '\n'.join(lines)
