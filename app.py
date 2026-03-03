@@ -2335,12 +2335,35 @@ class NewsFetcher:
 _news_fetcher = NewsFetcher()
 
 
+# ── State file constants + helpers (needed before snapshot writer) ─────────
+CONTROLS_FILE = os.path.join(_DATA_DIR, 'kona_controls.json')
+STATE_FILE = os.path.join(_DATA_DIR, 'kona_state.json')
+TRADE_HISTORY_FILE = os.path.join(_DATA_DIR, 'trade_history.csv')
+JOURNAL_FILE = os.path.join(_DATA_DIR, 'kona_journal.json')
+
+
 def _load_state() -> dict:
     try:
         with open(STATE_FILE) as f:
             return json.load(f)
     except Exception:
         return {}
+
+
+def _load_controls() -> dict[str, Any]:
+    try:
+        with open(CONTROLS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {'paused': False}
+
+
+def _save_controls(controls: dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(CONTROLS_FILE), exist_ok=True)
+    tmp = CONTROLS_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(controls, f, indent=2)
+    os.replace(tmp, CONTROLS_FILE)
 
 
 def _build_king_kam_snapshot() -> dict:
@@ -2684,27 +2707,7 @@ def ai_report() -> Response:
     return jsonify({'report': 'AI consultant not available — state files not found.'})
 
 
-# ── Scanner Controls ──────────────────────────────────────────
-CONTROLS_FILE = os.path.join(_DATA_DIR, 'kona_controls.json')
-STATE_FILE = os.path.join(_DATA_DIR, 'kona_state.json')
-TRADE_HISTORY_FILE = os.path.join(_DATA_DIR, 'trade_history.csv')
-JOURNAL_FILE = os.path.join(_DATA_DIR, 'kona_journal.json')
-
-
-def _load_controls() -> dict[str, Any]:
-    try:
-        with open(CONTROLS_FILE) as f:
-            return json.load(f)
-    except Exception:
-        return {'paused': False}
-
-
-def _save_controls(controls: dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(CONTROLS_FILE), exist_ok=True)
-    tmp = CONTROLS_FILE + '.tmp'
-    with open(tmp, 'w') as f:
-        json.dump(controls, f, indent=2)
-    os.replace(tmp, CONTROLS_FILE)
+# (Constants + _load_controls/_save_controls/_load_state moved above snapshot writer)
 
 
 @app.route("/api/controls", methods=["GET", "POST"])
