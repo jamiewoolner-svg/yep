@@ -730,6 +730,10 @@
       color: #fff;
     }
     .dash-btn-panic:hover { opacity: 0.9; }
+    .dash-btn-panic.active {
+      background: #4ade80;
+      color: #1a0f0a;
+    }
     /* Panic modal */
     .panic-overlay {
       position: fixed;
@@ -1045,11 +1049,11 @@
   <!-- Panic Modal -->
   <div class="panic-overlay" id="panic-overlay">
     <div class="panic-modal">
-      <h2>🌋 Pele's Wrath</h2>
-      <p>This will halt all trading activity, clear caches, and pause the system. No ka oi — are you sure, brah?</p>
+      <h2 id="panic-modal-title">🌋 Pele's Wrath</h2>
+      <p id="panic-modal-msg">This will sell ALL positions at market and halt all trading. No ka oi — are you sure, brah?</p>
       <div class="panic-modal-btns">
         <button class="panic-cancel" onclick="closePanic()">Nah, We Good</button>
-        <button class="panic-confirm" onclick="confirmPanic()">🌋 Burn It Down</button>
+        <button class="panic-confirm" id="panic-modal-confirm" onclick="confirmPanic()">🌋 Burn It Down</button>
       </div>
     </div>
   </div>
@@ -1927,38 +1931,69 @@
     }
     scanWaves();
 
-    /* ── Pause / Panic Controls ── */
-    let scannerPaused = false;
+    /* ── Pause / Pele Controls ── */
+    let isPaused = false;
+    let peleActive = false;
 
-    function loadPauseState() {
+    function loadControlState() {
       fetch('/api/controls').then(r => r.json()).then(data => {
-        scannerPaused = data.paused || false;
-        updatePauseBtn();
+        isPaused = data.paused || data.entries_paused || false;
+        peleActive = data.force_exit_all || false;
+        updateButtons();
       }).catch(() => {});
     }
 
-    function updatePauseBtn() {
-      const btn = document.getElementById('dash-pause');
-      if (scannerPaused) {
-        btn.textContent = '🏄 Imua! (Resume)';
-        btn.classList.add('paused');
+    function updateButtons() {
+      const pauseBtn = document.getElementById('dash-pause');
+      const peleBtn = document.getElementById('dash-panic');
+      if (peleActive) {
+        // Pele is active — both buttons reflect emergency state
+        pauseBtn.textContent = '🌺 Ho\u0027omaha (Pause)';
+        pauseBtn.classList.remove('paused');
+        pauseBtn.style.opacity = '0.5';
+        pauseBtn.style.pointerEvents = 'none';
+        peleBtn.textContent = '🏄 Resume Trading';
+        peleBtn.classList.add('active');
+      } else if (isPaused) {
+        pauseBtn.textContent = '🏄 Imua! (Resume)';
+        pauseBtn.classList.add('paused');
+        pauseBtn.style.opacity = '1';
+        pauseBtn.style.pointerEvents = 'auto';
+        peleBtn.textContent = '🌋 Pele\u0027s Wrath';
+        peleBtn.classList.remove('active');
       } else {
-        btn.textContent = '🌺 Ho\u0027omaha (Pause)';
-        btn.classList.remove('paused');
+        pauseBtn.textContent = '🌺 Ho\u0027omaha (Pause)';
+        pauseBtn.classList.remove('paused');
+        pauseBtn.style.opacity = '1';
+        pauseBtn.style.pointerEvents = 'auto';
+        peleBtn.textContent = '🌋 Pele\u0027s Wrath';
+        peleBtn.classList.remove('active');
       }
     }
 
     function togglePause() {
-      scannerPaused = !scannerPaused;
-      fetch('/api/controls', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({paused: scannerPaused})
-      }).catch(() => {});
-      updatePauseBtn();
+      if (peleActive) return; // Use Pele button to resume from Pele state
+      fetch('/api/pause', {method: 'POST'}).then(r => r.json()).then(data => {
+        isPaused = data.paused;
+        updateButtons();
+      }).catch(e => alert('Error: ' + e));
     }
 
     function openPanic() {
+      const title = document.getElementById('panic-modal-title');
+      const msg = document.getElementById('panic-modal-msg');
+      const btn = document.getElementById('panic-modal-confirm');
+      if (peleActive) {
+        title.textContent = '🏄 Resume Trading';
+        msg.textContent = 'This will resume normal trading and reconnect to IB. Ready to ride again, brah?';
+        btn.textContent = '🏄 Let\u0027s Go!';
+        btn.style.background = '#4ade80';
+      } else {
+        title.textContent = '🌋 Pele\u0027s Wrath';
+        msg.textContent = 'This will sell ALL positions at market and halt all trading. No ka oi — are you sure, brah?';
+        btn.textContent = '🌋 Burn It Down';
+        btn.style.background = '';
+      }
       document.getElementById('panic-overlay').classList.add('open');
     }
 
@@ -1968,14 +2003,19 @@
 
     function confirmPanic() {
       closePanic();
-      fetch('/api/panic-clear', {method: 'POST'}).then(r => r.json()).then(data => {
-        scannerPaused = true;
-        updatePauseBtn();
-        alert('All trading halted. Caches cleared.');
+      fetch('/api/pele', {method: 'POST'}).then(r => r.json()).then(data => {
+        peleActive = data.pele_active;
+        isPaused = peleActive;
+        updateButtons();
+        if (peleActive) {
+          alert('🌋 Pele activated — selling all positions, trading halted.');
+        } else {
+          alert('🏄 Trading resumed — IB reconnect requested. Imua!');
+        }
       }).catch(e => alert('Error: ' + e));
     }
 
-    loadPauseState();
+    loadControlState();
 
     /* ── Engine Status Dot ── */
     async function pollEngineStatus() {

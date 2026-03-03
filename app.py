@@ -2335,6 +2335,14 @@ class NewsFetcher:
 _news_fetcher = NewsFetcher()
 
 
+def _load_state() -> dict:
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 def _build_king_kam_snapshot() -> dict:
     """Build a live snapshot from state files + news for King Kam context."""
     state = _load_state()
@@ -2706,37 +2714,69 @@ def api_controls() -> Response:
         return jsonify(_load_controls())
     data = request.get_json(silent=True) or {}
     controls = _load_controls()
-    for key in ('paused', 'entries_paused'):
+    for key in ('paused', 'entries_paused', 'force_exit_all', 'reconnect_ib'):
         if key in data:
             controls[key] = bool(data[key])
     if 'risk_mode' in data and data['risk_mode'] in ('normal', 'risk_off', 'reduced'):
         controls['risk_mode'] = data['risk_mode']
     if 'force_exits' in data and isinstance(data['force_exits'], list):
         controls['force_exits'] = data['force_exits']
-    if 'force_exit_all' in data:
-        controls['force_exit_all'] = bool(data['force_exit_all'])
     _save_controls(controls)
     return jsonify(controls)
 
 
-@app.route("/api/panic-clear", methods=["POST"])
+@app.route("/api/pause", methods=["POST"])
 @require_auth
-def api_panic_clear() -> Response:
-    # Clear webapp caches
-    with _CHART_CACHE_LOCK:
-        _CHART_CACHE.clear()
-    with _SCAN_SNAPSHOT_LOCK:
-        _SCAN_SNAPSHOT_CACHE.clear()
-    with _EVENT_CACHE_LOCK:
-        _EVENT_CACHE.clear()
-    # Write real panic flags to engine controls
+def api_pause() -> Response:
+    """Toggle pause — stops new entries. Resume clears pause + requests IB reconnect."""
     controls = _load_controls()
-    controls['paused'] = True
-    controls['entries_paused'] = True
-    controls['risk_mode'] = 'risk_off'
-    controls['force_exit_all'] = True
-    _save_controls(controls)
-    return jsonify({'ok': True, 'message': 'PANIC: entries paused, risk_off, force_exit_all sent'})
+    currently_paused = controls.get('paused', False) or controls.get('entries_paused', False)
+    if currently_paused:
+        # Resume: clear pause flags, request IB reconnect
+        controls['paused'] = False
+        controls['entries_paused'] = False
+        controls['reconnect_ib'] = True
+        _save_controls(controls)
+        return jsonify({'ok': True, 'paused': False, 'message': 'Resumed — IB reconnect requested'})
+    else:
+        # Pause: stop new entries
+        controls['paused'] = True
+        controls['entries_paused'] = True
+        _save_controls(controls)
+        return jsonify({'ok': True, 'paused': True, 'message': 'Paused — no new entries'})
+
+
+@app.route("/api/pele", methods=["POST"])
+@require_auth
+def api_pele() -> Response:
+    """Toggle Pele's Wrath — sell all at market + pause. Resume clears everything + reconnects IB."""
+    controls = _load_controls()
+    pele_active = controls.get('force_exit_all', False)
+    if pele_active:
+        # Resume from Pele: clear all panic flags, request IB reconnect
+        controls['paused'] = False
+        controls['entries_paused'] = False
+        controls['risk_mode'] = 'normal'
+        controls['force_exit_all'] = False
+        controls.pop('force_exits', None)
+        controls['reconnect_ib'] = True
+        _save_controls(controls)
+        return jsonify({'ok': True, 'pele_active': False, 'message': 'Pele cleared — resuming normal trading, IB reconnect requested'})
+    else:
+        # Activate Pele: force sell all + pause everything
+        controls['paused'] = True
+        controls['entries_paused'] = True
+        controls['risk_mode'] = 'risk_off'
+        controls['force_exit_all'] = True
+        _save_controls(controls)
+        # Clear webapp caches
+        with _CHART_CACHE_LOCK:
+            _CHART_CACHE.clear()
+        with _SCAN_SNAPSHOT_LOCK:
+            _SCAN_SNAPSHOT_CACHE.clear()
+        with _EVENT_CACHE_LOCK:
+            _EVENT_CACHE.clear()
+        return jsonify({'ok': True, 'pele_active': True, 'message': 'PELE: selling all positions, trading halted'})
 
 
 # ── Live Engine Data Endpoints ───────────────────────────────
@@ -2746,14 +2786,6 @@ def api_panic_clear() -> Response:
 # Also reads kona_trades.json for daily snapshot
 
 TRADES_JSON_FILE = os.path.join(_DATA_DIR, 'kona_trades.json')
-
-
-def _load_state() -> dict:
-    try:
-        with open(STATE_FILE) as f:
-            return json.load(f)
-    except Exception:
-        return {}
 
 
 def _load_trades_json() -> dict:
@@ -2981,7 +3013,7 @@ def api_journal_analyze() -> Response:
         try:
             client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
             resp = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-4-6",
                 max_tokens=500,
                 system="You are King Kam, a Hawaiian trading advisor. Analyze the user's trading history and provide insights in Hawaiian Pidgin English. Be encouraging but honest. Keep it under 200 words.",
                 messages=[{"role": "user", "content": f"Analyze my trades:\n{summary}"}],

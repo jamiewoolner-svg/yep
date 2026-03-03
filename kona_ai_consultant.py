@@ -363,7 +363,7 @@ class KonaChat:
     """
     
     MAX_HISTORY = 20  # messages before trimming
-    MODEL = 'claude-sonnet-4-5-20250514'  # fast + cheap for monitoring
+    MODEL = 'claude-sonnet-4-6'  # fast + cheap for monitoring
     
     def __init__(self, aggregator: KonaDataAggregator):
         self.client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY env
@@ -761,7 +761,7 @@ class KonaMonitor:
         
         try:
             response = self.client.messages.create(
-                model='claude-sonnet-4-5-20250514',
+                model='claude-sonnet-4-6',
                 max_tokens=500,
                 system=KONA_SYSTEM_PROMPT,
                 messages=[{'role': 'user', 'content': prompt}],
