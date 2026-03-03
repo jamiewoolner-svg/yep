@@ -2256,6 +2256,233 @@ def api_watchlist() -> Response:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# ── King Kam Live Data Pipeline ──────────────────────────────────────────────
+# News fetcher + snapshot builder for real-time King Kam context
+
+POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "")
+KING_KAM_LIVE_FILE = os.path.join(_DATA_DIR, 'king_kam_live.json')
+_NEWS_CACHE_MINUTES = 5
+
+
+class NewsFetcher:
+    """Fetch news from Polygon API with caching."""
+
+    def __init__(self):
+        self._cache: dict[str, list] = {}
+        self._last_fetch: dict[str, float] = {}
+
+    def fetch_news(self, tickers: list[str], limit: int = 5) -> dict[str, list]:
+        if not POLYGON_API_KEY:
+            return {t: [] for t in tickers}
+        results = {}
+        now = time.time()
+        for ticker in tickers:
+            if ticker in self._last_fetch:
+                age_min = (now - self._last_fetch[ticker]) / 60
+                if age_min < _NEWS_CACHE_MINUTES:
+                    results[ticker] = self._cache.get(ticker, [])
+                    continue
+            try:
+                params = urllib.parse.urlencode({
+                    'ticker': ticker,
+                    'published_utc.gte': (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d'),
+                    'limit': limit,
+                    'sort': 'published_utc',
+                    'order': 'desc',
+                    'apiKey': POLYGON_API_KEY,
+                })
+                url = f'https://api.polygon.io/v2/reference/news?{params}'
+                req = urllib.request.Request(url, headers={'User-Agent': 'BigIsland/1.0'})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode())
+                items = []
+                for item in data.get('results', []):
+                    items.append({
+                        'time': item.get('published_utc', ''),
+                        'headline': item.get('title', ''),
+                        'source': item.get('publisher', {}).get('name', ''),
+                        'tickers': item.get('tickers', []),
+                        'summary': (item.get('description') or '')[:200],
+                    })
+                self._cache[ticker] = items
+                self._last_fetch[ticker] = now
+                results[ticker] = items
+            except Exception:
+                results[ticker] = self._cache.get(ticker, [])
+        return results
+
+    def get_news_for_snapshot(self, position_tickers: list[str], signal_tickers: list[str]) -> dict:
+        market_news = self.fetch_news(['SPY', 'QQQ'], limit=3)
+        pos_news = self.fetch_news(position_tickers[:5], limit=2) if position_tickers else {}
+        watch_news = self.fetch_news(signal_tickers[:5], limit=2) if signal_tickers else {}
+        return {
+            'last_fetch': datetime.utcnow().isoformat() + 'Z',
+            'market': self._flatten(market_news),
+            'positions': self._flatten(pos_news),
+            'watchlist': self._flatten(watch_news),
+        }
+
+    @staticmethod
+    def _flatten(news_by_ticker: dict) -> list:
+        flat = []
+        for ticker, items in news_by_ticker.items():
+            for item in items:
+                flat.append({'ticker': ticker, **item})
+        flat.sort(key=lambda x: x.get('time', ''), reverse=True)
+        return flat[:10]
+
+
+_news_fetcher = NewsFetcher()
+
+
+def _build_king_kam_snapshot() -> dict:
+    """Build a live snapshot from state files + news for King Kam context."""
+    state = _load_state()
+    controls = _load_controls()
+
+    # Positions
+    raw_pos = state.get('open_positions', state.get('positions', {}))
+    positions = []
+    if isinstance(raw_pos, dict):
+        for sym, p in raw_pos.items():
+            entry = float(p.get('avg_entry', p.get('entry_price', 0)))
+            current = float(p.get('current_price', p.get('mark', entry)))
+            contracts = int(p.get('contracts', p.get('qty', 1)))
+            pnl = (current - entry) * contracts * 100
+            positions.append({
+                'ticker': p.get('ticker', sym.split('_')[0] if '_' in str(sym) else sym),
+                'side': p.get('side', '?'),
+                'contracts': contracts,
+                'cost_basis': round(entry * contracts * 100, 2),
+                'current_value': round(current * contracts * 100, 2),
+                'unrealized_pnl': round(pnl, 2),
+                'unrealized_pnl_pct': round(((current - entry) / entry * 100) if entry > 0 else 0, 2),
+                'entry_date': p.get('entry_date', ''),
+                'expiry': str(p.get('expiry', ''))[:10],
+                'state': p.get('state', ''),
+            })
+    elif isinstance(raw_pos, list):
+        for p in raw_pos:
+            positions.append(p)
+
+    # Closed trades
+    closed = state.get('closed_trades', [])
+
+    # Fetch news
+    pos_tickers = [p['ticker'] for p in positions]
+    news = _news_fetcher.get_news_for_snapshot(pos_tickers, [])
+
+    balance = float(state.get('balance', state.get('available_capital', 0)))
+    last_update = state.get('last_run_utc', state.get('last_update', ''))
+
+    snapshot = {
+        'updated_at': datetime.utcnow().isoformat() + 'Z',
+        'engine_status': 'running' if state and last_update else 'unknown',
+        'account': {
+            'balance': balance,
+            'open_position_count': len(positions),
+            'env': state.get('account', 'unknown'),
+        },
+        'positions': positions,
+        'recent_trades': closed[-10:] if closed else [],
+        'controls': {
+            'risk_mode': controls.get('risk_mode', 'normal'),
+            'entries_paused': controls.get('entries_paused', False),
+            'paused': controls.get('paused', False),
+        },
+        'news': news,
+        'last_engine_update': last_update,
+    }
+
+    # Write to disk (atomic)
+    try:
+        os.makedirs(os.path.dirname(KING_KAM_LIVE_FILE), exist_ok=True)
+        tmp = KING_KAM_LIVE_FILE + '.tmp'
+        with open(tmp, 'w') as f:
+            json.dump(snapshot, f, indent=2, default=str)
+        os.replace(tmp, KING_KAM_LIVE_FILE)
+    except Exception as ex:
+        _log.warning("Failed to write king_kam_live.json: %s", ex)
+
+    return snapshot
+
+
+def _load_king_kam_snapshot() -> dict | None:
+    """Load live snapshot — prefer engine-written file, fallback to building it."""
+    try:
+        with open(KING_KAM_LIVE_FILE) as f:
+            snap = json.load(f)
+        # If snapshot is less than 30 seconds old, use it
+        updated = snap.get('updated_at', '')
+        if updated:
+            age = (datetime.utcnow() - datetime.fromisoformat(updated.replace('Z', ''))).total_seconds()
+            if age < 30:
+                return snap
+    except Exception:
+        pass
+    # Build fresh snapshot
+    return _build_king_kam_snapshot()
+
+
+def _snapshot_to_context(snap: dict) -> str:
+    """Format snapshot as text context for King Kam system prompt."""
+    if not snap:
+        return ""
+    lines = [f"LIVE DATA (as of {snap.get('updated_at', 'unknown')}):"]
+
+    acct = snap.get('account', {})
+    lines.append(f"Account: ${acct.get('balance', 0):,.0f} | {acct.get('open_position_count', 0)} open positions | env={acct.get('env', '?')}")
+
+    ctrl = snap.get('controls', {})
+    if ctrl.get('entries_paused') or ctrl.get('paused'):
+        lines.append(f"!! PAUSED: entries_paused={ctrl.get('entries_paused')}, risk_mode={ctrl.get('risk_mode')}")
+    else:
+        lines.append(f"Risk mode: {ctrl.get('risk_mode', 'normal')}")
+
+    positions = snap.get('positions', [])
+    if positions:
+        lines.append(f"\nOPEN POSITIONS ({len(positions)}):")
+        for p in positions:
+            lines.append(f"  {p.get('ticker','?')} {p.get('side','?')} {p.get('contracts',0)}x "
+                         f"P&L=${p.get('unrealized_pnl',0):+,.0f} ({p.get('unrealized_pnl_pct',0):+.1f}%) "
+                         f"exp={p.get('expiry','')} {p.get('state','')}")
+
+    trades = snap.get('recent_trades', [])
+    if trades:
+        lines.append(f"\nRECENT CLOSED TRADES ({len(trades)}):")
+        for t in trades[-5:]:
+            pnl = t.get('net_pnl', t.get('pnl', 0))
+            lines.append(f"  {t.get('ticker','?')} {t.get('side','?')} P&L=${float(pnl):+,.0f} exit={t.get('exit_type','?')}")
+
+    news = snap.get('news', {})
+    market_news = news.get('market', [])
+    if market_news:
+        lines.append("\nMARKET NEWS:")
+        for n in market_news[:3]:
+            lines.append(f"  [{n.get('source','')}] {n.get('headline','')}")
+    pos_news = news.get('positions', [])
+    if pos_news:
+        lines.append("\nPOSITION NEWS:")
+        for n in pos_news[:3]:
+            lines.append(f"  [{n.get('ticker','')}] {n.get('headline','')}")
+
+    return '\n'.join(lines)
+
+
+# Background snapshot writer (every 30 seconds)
+def _snapshot_writer_loop():
+    while True:
+        try:
+            _build_king_kam_snapshot()
+        except Exception as ex:
+            _log.warning("Snapshot writer error: %s", ex)
+        time.sleep(30)
+
+
+_snapshot_thread = threading.Thread(target=_snapshot_writer_loop, daemon=True)
+_snapshot_thread.start()
+
+
 # KING KAM — AI Trading Consultant (Hawaiian Pidgin)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2329,13 +2556,23 @@ The system exploits mean-reversion using Bollinger Bands and Stochastic RSI.
 
 
 def _ai_chat(user_message: str) -> str:
-    """Send a message to Claude as King Kam."""
+    """Send a message to Claude as King Kam with live data context."""
     if not HAS_ANTHROPIC or not ANTHROPIC_API_KEY:
         return "Set ANTHROPIC_API_KEY environment variable to enable King Kam."
 
     global _ai_chat_history
 
-    _ai_chat_history.append({"role": "user", "content": user_message})
+    # Build live context from snapshot
+    snap = _load_king_kam_snapshot()
+    live_context = _snapshot_to_context(snap)
+
+    # Augment first message (or every 5th) with live data
+    augmented = user_message
+    msg_count = len(_ai_chat_history)
+    if live_context and (msg_count == 0 or msg_count % 5 == 0):
+        augmented = f"<live_data>\n{live_context}\n</live_data>\n\n{user_message}"
+
+    _ai_chat_history.append({"role": "user", "content": augmented})
 
     # Keep history manageable
     if len(_ai_chat_history) > 20:
@@ -2354,6 +2591,14 @@ def _ai_chat(user_message: str) -> str:
         return reply
     except Exception as ex:
         return f"AI error: {ex}"
+
+
+@app.route("/api/king-kam-live")
+@require_auth
+def api_king_kam_live() -> Response:
+    """Live snapshot for King Kam — positions, news, controls."""
+    snap = _load_king_kam_snapshot()
+    return jsonify(snap or {})
 
 
 @app.route("/api/ai/status")
